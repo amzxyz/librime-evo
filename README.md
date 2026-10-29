@@ -1,20 +1,48 @@
-<meta charset="UTF-8">
+# librime-evo
+
+> **Fork notice**
+>
+> This repository is a personal fork of [rime/librime](https://github.com/rime/librime),
+> whose upstream is [rime/librime](https://github.com/rime/librime).
+>
+> It is **not** the official Rime project. For the canonical source, releases and
+> documentation, please refer to [rime/librime](https://github.com/rime/librime) and
+> [rime.im](https://rime.im).
+>
+> This fork is maintained independently. Changes relative to upstream are listed in
+> [Changes from upstream](#changes-from-upstream). Bug reports about unmodified
+> upstream behavior should go to the upstream project.
+
+[![Build status](https://github.com/amzxyz/librime-evo/actions/workflows/commit-ci.yml/badge.svg)](https://github.com/amzxyz/librime-evo/actions/workflows/commit-ci.yml)
+[![GitHub release](https://img.shields.io/github/release/amzxyz/librime-evo.svg)](https://github.com/amzxyz/librime-evo/releases)
+[![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 RIME: Rime Input Method Engine
 ===
-![Build status](https://github.com/rime/librime/actions/workflows/commit-ci.yml/badge.svg)
-[![GitHub release](https://img.shields.io/github/release/rime/librime.svg)](https://github.com/rime/librime/releases)
-[![License](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 Rime with your keystrokes.
 
 Project home
 ---
-[rime.im](https://rime.im)
+Upstream: [rime.im](https://rime.im)  
+This fork: [github.com/amzxyz/librime-evo](https://github.com/amzxyz/librime-evo)
+
+Changes from upstream
+---
+This fork is based on [rime/librime](https://github.com/rime/librime).
+The following is a non-exhaustive list of local changes:
+
+- [ ] TODO: 增加辅助码功能
+- [ ] TODO: 重构滤镜模块等
+
+Everything not listed here should be assumed to match upstream. When in doubt,
+compare against the upstream repository before reporting a bug.
 
 License
 ---
 [The 3-Clause BSD License](https://opensource.org/licenses/BSD-3-Clause)
+
+This fork retains the original copyright notices. See [LICENSE](LICENSE) for details.
 
 Features
 ===
@@ -96,7 +124,6 @@ Community:
   - [pyrime](https://github.com/Freed-Wu/pyrime): frontend for Ptpython
   - [rabbit](https://github.com/amorphobia/rabbit): frontend for Windows
   - [rime.nvim](https://github.com/Freed-Wu/rime.nvim): frontend for Vim
-  - [rime.vim](https://github.com/TSalmon3/rime.vim): frontend for Vim and Neovim
   - [rl_custom_rime](https://github.com/Freed-Wu/rl_custom_rime): frontend for Readline
   - [tmux-rime](https://github.com/Freed-Wu/tmux-rime): frontend for Tmux
   - [zsh-rime](https://github.com/Freed-Wu/zsh-rime): frontend for Zsh
