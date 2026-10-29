@@ -31,6 +31,7 @@ const int32_t kSpellingTypeMask = ~kTypeIsCorrectionMask;
 
 const char kPrismFormat[] = "Rime::Prism/5.0";
 const double kPrismFormatVersion = 5.0;
+constexpr int32_t kAuxiliaryDescriptorFlag = 0x100;
 
 const char kPrismFormatPrefix[] = "Rime::Prism/";
 const size_t kPrismFormatPrefixLen = sizeof(kPrismFormatPrefix) - 1;
@@ -70,11 +71,28 @@ SpellingProperties SpellingAccessor::properties() const {
   SpellingProperties props;
   if (iter_ && iter_ < end_) {
     int32_t packed_type = iter_->type;
-    props.type = static_cast<SpellingType>(packed_type & kSpellingTypeMask);
+    props.type = static_cast<SpellingType>(
+        packed_type & (kSpellingTypeMask & ~kAuxiliaryDescriptorFlag));
     props.is_correction = (packed_type & kTypeIsCorrectionMask) != 0;
+    props.auxiliary = (packed_type & kAuxiliaryDescriptorFlag) != 0;
     props.credibility = iter_->credibility;
-    if (!iter_->tips.empty())
-      props.tips = iter_->tips.c_str();
+    if (!iter_->tips.empty()) {
+      string hints = iter_->tips.c_str();
+      const string prefix(
+          "\x01"
+          "AUX1"
+          "\x01");
+      if (props.auxiliary && hints.compare(0, prefix.size(), prefix) == 0) {
+        auto sep = hints.find('\x01', prefix.size());
+        if (sep != string::npos) {
+          props.auxiliary_characters =
+              hints.substr(prefix.size(), sep - prefix.size());
+          props.tips = hints.substr(sep + 1);
+        }
+      } else {
+        props.tips = std::move(hints);
+      }
+    }
   }
   return props;
 }
@@ -142,7 +160,8 @@ bool Prism::Save() {
 bool Prism::Build(const Syllabary& syllabary,
                   const Script* script,
                   uint32_t dict_file_checksum,
-                  uint32_t schema_file_checksum) {
+                  uint32_t schema_file_checksum,
+                  const AuxiliaryCharacterMap* aux_characters) {
   // building double-array trie
   size_t num_syllables = syllabary.size();
   size_t num_spellings = script ? script->size() : syllabary.size();
@@ -169,10 +188,17 @@ bool Prism::Build(const Syllabary& syllabary,
   // creating prism file
   size_t array_size = trie_->size();
   size_t image_size = trie_->total_size();
-  const size_t kDescriptorExtraSize = 12;
+  const size_t kDescriptorExtraSize = 32;
   size_t estimated_map_size =
       num_spellings * 12 +
       map_size * (4 + sizeof(prism::SpellingDescriptor) + kDescriptorExtraSize);
+  if (aux_characters) {
+    for (const auto& item : *aux_characters) {
+      for (const auto& character : item.second)
+        estimated_map_size += character.size();
+      estimated_map_size += 16;  // AUX payload prefix and separators.
+    }
+  }
   const size_t kReservedSize = 1024;
   if (!Create(image_size + estimated_map_size + kReservedSize)) {
     LOG(ERROR) << "Error creating prism file '" << file_path() << "'.";
@@ -237,15 +263,30 @@ bool Prism::Build(const Syllabary& syllabary,
       auto desc = item->begin();
       for (; j != i->second.end(); ++j, ++desc) {
         desc->syllable_id = syllable_to_id[j->str];
-        // 打包寫入 type + is_correction
+        // 打包寫入 type + is_correction + AUX descriptor flag
         int32_t packed_type = static_cast<int32_t>(j->properties.type);
-        if (j->properties.is_correction) {
+        if (j->properties.is_correction)
           packed_type |= kTypeIsCorrectionMask;
-        }
+        if (j->properties.auxiliary)
+          packed_type |= kAuxiliaryDescriptorFlag;
         desc->type = packed_type;
         desc->credibility = j->properties.credibility;
-        if (!j->properties.tips.empty() &&
-            !CopyString(j->properties.tips, &desc->tips)) {
+        string persisted_tips = j->properties.tips;
+        if (j->properties.auxiliary && aux_characters) {
+          auto source = aux_characters->find({i->first, j->str});
+          if (source != aux_characters->end()) {
+            string chars;
+            for (const string& c : source->second)
+              chars += c;
+            persisted_tips = string(
+                                 "\x01"
+                                 "AUX1"
+                                 "\x01") +
+                             chars + "\x01" + persisted_tips;
+          }
+        }
+        if (!persisted_tips.empty() &&
+            !CopyString(persisted_tips, &desc->tips)) {
           LOG(ERROR) << "Error creating spelling properties.";
           return false;
         }
@@ -255,7 +296,11 @@ bool Prism::Build(const Syllabary& syllabary,
     spelling_map_ = spelling_map;
   }
   // at last, complete the metadata
-  std::strncpy(metadata->format, kPrismFormat,
+  // librime 1.17 reads Prism/5.0. AUX metadata is optional, but ordinary
+  // dictionaries must use the same current container format instead of the
+  // legacy 3.1 fallback.
+  const char* output_format = kPrismFormat;
+  std::strncpy(metadata->format, output_format,
                prism::Metadata::kFormatMaxLength);
   return true;
 }

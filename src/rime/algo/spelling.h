@@ -27,6 +27,9 @@ struct SpellingProperties {
   double credibility = 0.0;
   string tips;
   bool is_correction = false;
+  bool auxiliary = false;       // AUX hit; not a ranking penalty
+  string auxiliary_characters;  // compiled from the original single-character
+                                // source
 
   // 疊加運算規則, 將運算規則產生的屬性應用到當前拼寫上
   void Compose(const SpellingProperties& delta);

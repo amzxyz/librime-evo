@@ -18,6 +18,7 @@ namespace rime {
 
 class Code;
 class Corrector;
+class AuxiliaryMatcher;
 struct DictEntry;
 class Dictionary;
 class Poet;
@@ -50,6 +51,10 @@ class ScriptTranslator : public Translator,
   int spelling_hints() const { return spelling_hints_; }
   bool always_show_comments() const { return always_show_comments_; }
   bool enable_word_completion() const { return enable_word_completion_; }
+  std::shared_ptr<AuxiliaryMatcher> auxiliary_matcher() const {
+    return auxiliary_matcher_;
+  }
+  bool auxiliary_enabled() const;
   int max_word_length() const { return max_word_length_; }
   int core_word_length() const;
   Projection* canonicalizer() const { return canonicalizer_.get(); }
@@ -64,6 +69,9 @@ class ScriptTranslator : public Translator,
   bool enable_word_completion_ = false;
   the<Projection> canonicalizer_;
   the<Corrector> corrector_;
+  std::shared_ptr<AuxiliaryMatcher> auxiliary_matcher_;
+  bool auxiliary_mode_ = false;
+  string auxiliary_option_;
   the<Poet> poet_;
   vector<an<Phrase>> queue_;
 };

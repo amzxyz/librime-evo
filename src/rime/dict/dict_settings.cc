@@ -12,10 +12,29 @@ namespace rime {
 
 DictSettings::DictSettings() {}
 
-bool DictSettings::LoadDictHeader(std::istream& stream) {
+bool DictSettings::LoadDictHeader(std::istream& stream, bool allow_headerless) {
   if (!stream.good()) {
     LOG(ERROR) << "failed to load dict header from stream.";
     return false;
+  }
+  // Imported tables commonly contain entries without a YAML header.
+  // The top-level dictionary still requires a valid name/version header.
+  if (allow_headerless) {
+    auto start = stream.tellg();
+    string first;
+    while (std::getline(stream, first)) {
+      boost::algorithm::trim(first);
+      if (first.empty() || first[0] == '#')
+        continue;
+      if (first != "---" && first.rfind("name:", 0) != 0) {
+        stream.clear();
+        stream.seekg(start);
+        return true;
+      }
+      break;
+    }
+    stream.clear();
+    stream.seekg(start);
   }
   std::stringstream header;
   string line;

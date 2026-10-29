@@ -21,6 +21,7 @@
 #include <rime/schema.h>
 #include <rime/translation.h>
 #include <rime/algo/syllabifier.h>
+#include <utf8.h>
 #include <rime/dict/corrector.h>
 #include <rime/dict/dictionary.h>
 #include <rime/dict/user_dictionary.h>
@@ -28,10 +29,77 @@
 #include <rime/gear/script_translator.h>
 #include <rime/gear/translator_commons.h>
 
+namespace rime {
+
+// Auxiliary matcher: Prism determines whether the input is AUX.
+// The existing single-character table determines the allowed text.
+class AuxiliaryMatcher {
+ public:
+  explicit AuxiliaryMatcher(Dictionary* primary) : auxiliary_(primary) {
+    if (!primary || !primary->loaded())
+      return;
+    Syllabary syllables;
+    if (primary->primary_table()->GetSyllabary(&syllables)) {
+      SyllableId id = 0;
+      for (const auto& syllable : syllables)
+        main_ids_[syllable] = id++;
+    }
+  }
+
+  void Lookup(const string& input, vector<AuxGraphMatch>* result) {
+    if (!auxiliary_ || !result || input.empty())
+      return;
+    vector<Prism::Match> matches;
+    auxiliary_->prism()->CommonPrefixSearch(input, &matches);
+    for (const auto& match : matches) {
+      for (auto accessor = auxiliary_->prism()->QuerySpelling(match.value);
+           !accessor.exhausted(); accessor.Next()) {
+        if (!accessor.properties().auxiliary)
+          continue;
+        auto id = accessor.syllable_id();
+        const auto base_code = auxiliary_->primary_table()->GetSyllableById(id);
+        auto base = main_ids_.find(base_code);
+        if (base == main_ids_.end())
+          continue;
+        const string& chars = accessor.properties().auxiliary_characters;
+        if (chars.empty())
+          continue;
+        // The Prism descriptor is only an AUX projection.  Confirm that the
+        // corresponding pure syllable still has a real single-character
+        // Table entry before it is allowed to create a graph constraint.
+        auto table_words =
+            auxiliary_->primary_table()->QueryWords(base->second);
+        if (table_words.exhausted())
+          continue;
+        auto permitted = permitted_chars_.find(chars);
+        if (permitted == permitted_chars_.end()) {
+          std::set<string> allowed;
+          for (auto p = chars.begin(); p != chars.end();) {
+            auto begin = p;
+            utf8::next(p, chars.end());
+            allowed.emplace(begin, p);
+          }
+          permitted =
+              permitted_chars_
+                  .emplace(chars, std::make_shared<const std::set<string>>(
+                                      std::move(allowed)))
+                  .first;
+        }
+        if (!permitted->second->empty()) {
+          result->push_back({match.length, base->second, permitted->second});
+        }
+      }
+    }
+  }
+
+ private:
+  Dictionary* auxiliary_;
+  map<string, SyllableId> main_ids_;
+  map<string, std::shared_ptr<const std::set<string>>> permitted_chars_;
+};
+
 // static const char* quote_left = "\xef\xbc\x88";
 // static const char* quote_right = "\xef\xbc\x89";
-
-namespace rime {
 
 namespace {
 
@@ -45,7 +113,18 @@ struct SyllabifyTask {
                 size_t next_pos)>
       push;
   function<void(SyllabifyTask* task, size_t depth)> pop;
+  vector<string> characters;
 };
+
+static vector<string> SplitCharacters(const string& text) {
+  vector<string> result;
+  for (auto p = text.begin(); p != text.end();) {
+    const auto begin = p;
+    utf8::next(p, text.end());
+    result.emplace_back(begin, p);
+  }
+  return result;
+}
 
 static bool syllabify_dfs(SyllabifyTask* task,
                           size_t depth,
@@ -64,6 +143,12 @@ static bool syllabify_dfs(SyllabifyTask* task,
       continue;
     auto x = y.second.find(syllable_id);
     if (x != y.second.end()) {
+      const auto& props = x->second;
+      if (!props.has_normal &&
+          (depth >= task->characters.size() ||
+           (!props.auxiliary_chars ||
+            !props.auxiliary_chars->count(task->characters[depth]))))
+        continue;
       task->push(task, depth, current_pos, end_vertex_pos);
       if (syllabify_dfs(task, depth + 1, end_vertex_pos))
         return true;
@@ -80,16 +165,24 @@ class ScriptSyllabifier : public PhraseSyllabifier {
   ScriptSyllabifier(ScriptTranslator* translator,
                     Corrector* corrector,
                     const string& input,
-                    size_t start)
+                    size_t start,
+                    std::shared_ptr<AuxiliaryMatcher> auxiliary)
       : translator_(translator),
         input_(input),
         start_(start),
         syllabifier_(translator->delimiters(),
                      translator->enable_completion(),
                      translator->strict_spelling(),
-                     translator->canonicalizer()) {
+                     translator->canonicalizer()),
+        auxiliary_active_(bool(auxiliary)) {
     if (corrector) {
       syllabifier_.EnableCorrection(corrector);
+    }
+    if (auxiliary) {
+      syllabifier_.SetAuxiliaryLookup(
+          [auxiliary](const string& input, vector<AuxGraphMatch>* out) {
+            auxiliary->Lookup(input, out);
+          });
     }
   }
 
@@ -100,6 +193,7 @@ class ScriptSyllabifier : public PhraseSyllabifier {
   bool IsCorrection(const Code& code, size_t code_length) const;
 
   const SyllableGraph& syllable_graph() const { return syllable_graph_; }
+  bool auxiliary_active() const { return auxiliary_active_; }
 
  protected:
   ScriptTranslator* translator_;
@@ -107,6 +201,7 @@ class ScriptSyllabifier : public PhraseSyllabifier {
   size_t start_;
   Syllabifier syllabifier_;
   SyllableGraph syllable_graph_;
+  bool auxiliary_active_ = false;
 };
 
 class ScriptTranslation : public Translation {
@@ -123,8 +218,13 @@ class ScriptTranslation : public Translation {
         poet_(poet),
         start_(start),
         end_of_input_(end_of_input),
-        syllabifier_(
-            New<ScriptSyllabifier>(translator, corrector, input, start)),
+        syllabifier_(New<ScriptSyllabifier>(
+            translator,
+            corrector,
+            input,
+            start,
+            translator->auxiliary_enabled() ? translator->auxiliary_matcher()
+                                            : nullptr)),
         enable_correction_(corrector),
         max_sentences_(max_sentences),
         sentence_cutoff_threshold_(sentence_cutoff_threshold) {
@@ -140,7 +240,8 @@ class ScriptTranslation : public Translation {
   bool PrepareCandidate();
   template <class QueryResult>
   void EnrollEntries(map<int, DictEntryList>& entries_by_end_pos,
-                     const an<QueryResult>& query_result);
+                     const an<QueryResult>& query_result,
+                     size_t start_pos);
   WordGraph PrepareForMakingSentence(Dictionary* dict,
                                      UserDictionary* user_dict);
   an<Sentence> MakeSentence(Dictionary* dict, UserDictionary* user_dict);
@@ -203,6 +304,9 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
         canonicalizer_ = std::move(canonicalizer);
       }
     }
+    auxiliary_mode_ = true;
+    config->GetBool(name_space_ + "/auxiliary_mode", &auxiliary_mode_);
+    config->GetString(name_space_ + "/auxiliary_option", &auxiliary_option_);
   }
   if (enable_correction_) {
     if (auto* corrector = Corrector::Require("corrector")) {
@@ -222,6 +326,10 @@ an<Translation> ScriptTranslator::Query(const string& input,
 
   FinishSession();
 
+  if (!auxiliary_matcher_ && dict_->prism()->SupportsAuxiliaryCharacters()) {
+    auxiliary_matcher_ = std::make_shared<AuxiliaryMatcher>(dict_.get());
+  }
+
   bool enable_user_dict =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
 
@@ -239,6 +347,14 @@ an<Translation> ScriptTranslator::Query(const string& input,
     return poet_->ContextualWeighted(deduped, input, segment.start, this);
   }
   return deduped;
+}
+
+bool ScriptTranslator::auxiliary_enabled() const {
+  if (!auxiliary_matcher_ || !engine_)
+    return false;
+  if (!auxiliary_option_.empty())
+    return engine_->context()->get_option(auxiliary_option_);
+  return auxiliary_mode_;
 }
 
 int ScriptTranslator::core_word_length() const {
@@ -365,6 +481,7 @@ Spans ScriptSyllabifier::Syllabify(const Phrase* phrase) {
       [&](SyllabifyTask* task, size_t depth, size_t current_pos,
           size_t next_pos) { vertices.push_back(start_ + next_pos); },
       [&](SyllabifyTask* task, size_t depth) { vertices.pop_back(); }};
+  task.characters = SplitCharacters(phrase->text());
   if (syllabify_dfs(&task, 0, phrase->start() - start_)) {
     result.set_vertices(std::move(vertices));
   }
@@ -434,6 +551,7 @@ string ScriptSyllabifier::GetPreeditString(const Phrase& cand) const {
                        output.resize(lengths.top());
                        lengths.pop();
                      }};
+  task.characters = SplitCharacters(cand.text());
   if (syllabify_dfs(&task, 0, cand.start() - start_)) {
     return translator_->FormatPreedit(output);
   } else {
@@ -455,6 +573,28 @@ static bool has_exact_match_phrase(Ptr ptr, Iter iter, size_t consumed) {
          iter->second.Peek()->IsExactMatch();
 }
 
+// Filter before both exact-phrase suppression and homophone truncation.
+template <class Collector>
+static void FilterAuxiliaryEntries(const an<Collector>& collector,
+                                   const SyllableGraph& graph,
+                                   size_t start) {
+  if (!collector)
+    return;
+  for (auto it = collector->begin(); it != collector->end();) {
+    const size_t end = it->first;
+    it->second.AddFilter([&graph, start, end](an<DictEntry> entry) {
+      bool keep =
+          entry && SyllableGraphMatches(graph, entry->code, entry->text, start,
+                                        end, entry->matching_code_size);
+      return keep;
+    });
+    if (it->second.exhausted()) {
+      it = collector->erase(it);
+    } else
+      ++it;
+  }
+}
+
 // ScriptTranslation implementation
 
 bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
@@ -472,7 +612,12 @@ bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
         user_dict->Lookup(syllable_graph, 0, kUnlimitedDepth,
                           predict_word ? kNumSyllablesToPredictWord : 0);
   }
-  if (!phrase_ && !user_phrase_)
+  if (syllabifier_->auxiliary_active()) {
+    FilterAuxiliaryEntries(phrase_, syllable_graph, 0);
+    FilterAuxiliaryEntries(user_phrase_, syllable_graph, 0);
+  }
+  if ((!phrase_ || phrase_->empty()) &&
+      (!user_phrase_ || user_phrase_->empty()))
     return false;
 
   if (phrase_)
@@ -688,8 +833,13 @@ bool ScriptTranslation::CheckEmpty() {
 template <class QueryResult>
 void ScriptTranslation::EnrollEntries(
     map<int, DictEntryList>& entries_by_end_pos,
-    const an<QueryResult>& query_result) {
+    const an<QueryResult>& query_result,
+    size_t start_pos) {
   if (query_result) {
+    if (syllabifier_->auxiliary_active()) {
+      FilterAuxiliaryEntries(query_result, syllabifier_->syllable_graph(),
+                             start_pos);
+    }
     for (auto& y : *query_result) {
       DictEntryList& homophones = entries_by_end_pos[y.first];
       while (homophones.size() < translator_->max_homophones() &&
@@ -713,11 +863,14 @@ WordGraph ScriptTranslation::PrepareForMakingSentence(
     if (user_dict) {
       EnrollEntries(same_start_pos,
                     user_dict->Lookup(syllable_graph, x.first,
-                                      kMaxSyllablesForUserPhraseQuery));
+                                      kMaxSyllablesForUserPhraseQuery),
+                    x.first);
     }
     // merge lookup results
-    EnrollEntries(same_start_pos, dict->Lookup(syllable_graph, x.first,
-                                               &translator_->blacklist()));
+    EnrollEntries(
+        same_start_pos,
+        dict->Lookup(syllable_graph, x.first, &translator_->blacklist()),
+        x.first);
   }
   return graph;
 }

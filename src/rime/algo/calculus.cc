@@ -23,6 +23,7 @@ Calculus::Calculus() {
   Register("fuzz", &Fuzzing::Parse);
   Register("abbrev", &Abbreviation::Parse);
   Register("reorder", &Reorder::Parse);
+  Register("aux", &Auxiliary::Parse);
 }
 
 void Calculus::Register(const string& token, Calculation::Factory* factory) {
@@ -367,6 +368,32 @@ bool Reorder::Apply(Spelling* spelling) {
   }
 
   return modified;
+}
+
+}  // namespace rime
+
+namespace rime {
+
+Calculation* Auxiliary::Parse(const vector<string>& args) {
+  if (args.size() < 3 || args[1].empty())
+    return NULL;
+  the<Auxiliary> x(new Auxiliary);
+  x->pattern_.assign(args[1]);
+  x->replacement_.assign(args[2]);
+  return x.release();
+}
+
+bool Auxiliary::Apply(Spelling* spelling) {
+  if (!spelling || spelling->str.empty() ||
+      !boost::regex_search(spelling->str, pattern_))
+    return false;
+  // An AUX rule may intentionally retain the complete suffix (for example
+  // `cd`), while still declaring it an AUX spelling. Transformation::Apply
+  // reports an unchanged replacement as false, which would lose that
+  // declaration, so apply the replacement directly after confirming a match.
+  spelling->str = boost::regex_replace(spelling->str, pattern_, replacement_);
+  spelling->properties.auxiliary = true;
+  return true;
 }
 
 }  // namespace rime

@@ -10,6 +10,7 @@
 #include <rime/dict/prism.h>
 #include <rime/algo/algebra.h>
 #include <rime/algo/syllabifier.h>
+#include <rime/dict/vocabulary.h>
 
 using namespace rime;
 
@@ -357,4 +358,125 @@ TEST_F(CanonicalizeSyllabifierTest, NullCanonicalizerFallback) {
   int farthest_disordered = syllabifier.BuildSyllableGraph(
       "FZURO", *loaded_prism_, &graph_disordered);
   EXPECT_NE(5, farthest_disordered);
+}
+
+TEST(RimeSyllabifierAuxiliaryTest, KeepsBothOrdinaryAndAuxiliaryPaths) {
+  rime::Syllabary syllables = {"ab", "cde", "de"};
+  rime::Prism prism(rime::path{"syllabifier_auxiliary_test.bin"});
+  ASSERT_TRUE(prism.Build(syllables));
+  rime::Syllabifier syllabifier;
+  syllabifier.SetAuxiliaryLookup(
+      [](const rime::string& input, rime::vector<rime::AuxGraphMatch>* out) {
+        if (input.compare(0, 3, "abc") == 0) {
+          out->push_back({3, 0,
+                          std::make_shared<const std::set<rime::string>>(
+                              std::set<rime::string>{"甲"})});
+        }
+      });
+  rime::SyllableGraph graph;
+  EXPECT_EQ(5, syllabifier.BuildSyllableGraph("abcde", prism, &graph));
+  ASSERT_TRUE(graph.edges[0].count(2));
+  ASSERT_TRUE(graph.edges[0].count(3));
+  ASSERT_TRUE(graph.edges[2].count(5));
+  ASSERT_TRUE(graph.edges[3].count(5));
+  rime::Code aux;
+  aux.push_back(0);
+  aux.push_back(2);
+  rime::Code plain;
+  plain.push_back(0);
+  plain.push_back(1);
+  EXPECT_TRUE(rime::SyllableGraphMatches(graph, aux, "甲乙", 0, 5));
+  EXPECT_FALSE(rime::SyllableGraphMatches(graph, aux, "家乙", 0, 5));
+  EXPECT_TRUE(rime::SyllableGraphMatches(graph, plain, "家丙", 0, 5));
+}
+
+TEST(RimeSyllabifierAuxiliaryTest, RemovesOrdinaryTailAtExactAuxSpan) {
+  rime::Syllabary syllables = {"hk", "n"};
+  rime::Prism prism(rime::path{"syllabifier_auxiliary_exact_span.bin"});
+  ASSERT_TRUE(prism.Build(syllables));
+  rime::Syllabifier syllabifier;
+  syllabifier.SetAuxiliaryLookup(
+      [](const rime::string& input, rime::vector<rime::AuxGraphMatch>* out) {
+        if (input.compare(0, 3, "hkn") == 0) {
+          out->push_back({3, 0,
+                          std::make_shared<const std::set<rime::string>>(
+                              std::set<rime::string>{"好"})});
+        }
+      });
+  rime::SyllableGraph graph;
+  ASSERT_EQ(3, syllabifier.BuildSyllableGraph("hkn", prism, &graph));
+  rime::Code one;
+  one.push_back(0);
+  rime::Code two;
+  two.push_back(0);
+  two.push_back(1);
+  EXPECT_TRUE(rime::SyllableGraphMatches(graph, one, "好", 0, 3));
+  EXPECT_FALSE(rime::SyllableGraphMatches(graph, two, "好呢", 0, 3));
+}
+
+TEST(RimeSyllabifierAuxiliaryTest, AuxiliarySpanIncludesLeadingDelimiter) {
+  rime::Syllabary syllables = {"ni", "zl"};
+  rime::Prism prism(rime::path{"syllabifier_auxiliary_delimiter.bin"});
+  ASSERT_TRUE(prism.Build(syllables));
+  rime::Syllabifier syllabifier("' ");
+  syllabifier.SetAuxiliaryLookup(
+      [](const rime::string& input, rime::vector<rime::AuxGraphMatch>* out) {
+        if (input.compare(0, 2, "zl") == 0) {
+          out->push_back({2, 1,
+                          std::make_shared<const std::set<rime::string>>(
+                              std::set<rime::string>{"在"})});
+        }
+      });
+  rime::SyllableGraph graph;
+  ASSERT_EQ(3, syllabifier.BuildSyllableGraph(" zl", prism, &graph));
+  // The edge starts at the vertex before the space but consumes the space
+  // together with the AUX spelling, just like an ordinary spelling edge.
+  EXPECT_TRUE(graph.edges[0].count(3));
+  EXPECT_FALSE(graph.edges[0].count(2));
+}
+
+TEST(RimeSyllabifierAuxiliaryTest, AuxiliaryLookupSkipsInternalDelimiter) {
+  rime::Syllabary syllables = {"hk", "n"};
+  rime::Prism prism(rime::path{"syllabifier_auxiliary_exact_span.bin"});
+  ASSERT_TRUE(prism.Build(syllables));
+  rime::Syllabifier syllabifier("' ");
+  syllabifier.SetAuxiliaryLookup(
+      [](const rime::string& input, rime::vector<rime::AuxGraphMatch>* out) {
+        // The provider sees the same compact spelling as Prism: "hk n" ->
+        // "hkn".
+        if (input.compare(0, 3, "hkn") == 0) {
+          out->push_back({3, 0,
+                          std::make_shared<const std::set<rime::string>>(
+                              std::set<rime::string>{"好"})});
+        }
+      });
+  rime::SyllableGraph graph;
+  ASSERT_EQ(4, syllabifier.BuildSyllableGraph("hk n", prism, &graph));
+  EXPECT_TRUE(graph.edges[0].count(4));
+  rime::Code one;
+  one.push_back(0);
+  EXPECT_TRUE(rime::SyllableGraphMatches(graph, one, "好", 0, 4));
+}
+
+TEST(RimeSyllabifierAuxiliaryTest, IncompleteAuxPrefixDoesNotFilterNormalPath) {
+  rime::Syllabary syllables = {"hk", "n"};
+  rime::Prism prism(rime::path{"syllabifier_auxiliary_incomplete.bin"});
+  ASSERT_TRUE(prism.Build(syllables));
+  rime::Syllabifier syllabifier;
+  syllabifier.SetAuxiliaryLookup(
+      [](const rime::string& input, rime::vector<rime::AuxGraphMatch>* out) {
+        if (input.compare(0, 3, "hkn") == 0) {
+          out->push_back({3, 0,
+                          std::make_shared<const std::set<rime::string>>(
+                              std::set<rime::string>{"好"})});
+        }
+      });
+  rime::SyllableGraph graph;
+  ASSERT_EQ(3, syllabifier.BuildSyllableGraph("hknx", prism, &graph));
+  EXPECT_FALSE(graph.has_auxiliary);
+  EXPECT_TRUE(graph.auxiliary_constraints.empty());
+  rime::Code ordinary;
+  ordinary.push_back(0);
+  ordinary.push_back(1);
+  EXPECT_TRUE(rime::SyllableGraphMatches(graph, ordinary, "好呢", 0, 3));
 }

@@ -16,7 +16,7 @@ namespace rime {
 class DictSettings : public Config {
  public:
   DictSettings();
-  bool LoadDictHeader(std::istream& stream);
+  bool LoadDictHeader(std::istream& stream, bool allow_headerless = false);
   bool empty();
   string dict_name();
   string dict_version();

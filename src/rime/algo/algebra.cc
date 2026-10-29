@@ -27,7 +27,9 @@ void Script::Merge(const string& s,
     Spelling y(x);
     // 疊加運算結果
     y.properties.Compose(sp);
-    auto e = std::find(m.begin(), m.end(), x);
+    auto e = std::find_if(m.begin(), m.end(), [&](const Spelling& z) {
+      return z.str == y.str && z.properties.auxiliary == y.properties.auxiliary;
+    });
     if (e == m.end()) {
       m.push_back(y);
     } else {

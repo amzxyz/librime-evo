@@ -76,3 +76,20 @@ TEST(RimeAlgebraTest, Projection) {
   EXPECT_EQ(rime::kAbbreviation, s["sh"][0].properties.type);
   EXPECT_DOUBLE_EQ(log(0.5), s["sh"][0].properties.credibility);
 }
+
+TEST(RimeAlgebraTest, AuxiliaryAndNormalSpellingRemainDistinct) {
+  auto settings = rime::New<rime::ConfigList>();
+  settings->Append(
+      rime::New<rime::ConfigValue>("aux|^([^;]+);([a-z]).*$|$1$2|"));
+  settings->Append(rime::New<rime::ConfigValue>("erase|^.*;.*$|"));
+  rime::Projection projection;
+  ASSERT_TRUE(projection.Load(settings));
+  rime::Script script;
+  script.AddSyllable("ab;cd");
+  ASSERT_TRUE(projection.Apply(&script));
+  ASSERT_EQ(1u, script.count("abc"));
+  ASSERT_EQ(1u, script["abc"].size());
+  EXPECT_TRUE(script["abc"][0].properties.auxiliary);
+  EXPECT_EQ("ab;cd", script["abc"][0].str);
+  EXPECT_EQ(0u, script.count("ab;cd"));
+}

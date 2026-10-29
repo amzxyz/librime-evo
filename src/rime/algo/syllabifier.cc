@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <queue>
 #include <string_view>
+#include <utf8.h>
+#include <rime/dict/vocabulary.h>
 #include <boost/range/adaptor/reversed.hpp>
 #include <rime/algo/syllabifier.h>
 #include <rime/dict/corrector.h>
@@ -127,6 +129,11 @@ int Syllabifier::BuildSyllableGraph(const string& input,
         while (!accessor.exhausted()) {
           SyllableId syllable_id = accessor.syllable_id();
           EdgeProperties props(accessor.properties());
+          if (props.auxiliary) {
+            // AUX is a conditional path, never an ordinary spelling edge.
+            accessor.Next();
+            continue;
+          }
           if (strict_spelling_ && matches_input &&
               props.type != kNormalSpelling) {
             // disqualify fuzzy spelling or abbreviation as single word
@@ -169,6 +176,60 @@ int Syllabifier::BuildSyllableGraph(const string& input,
                    << end_pos << ")";
       }
     }
+    if (auxiliary_lookup_) {
+      vector<AuxGraphMatch> aux_matches;
+      // Prism keys never contain the user-facing syllable delimiters.  The
+      // ordinary matcher consumes them while walking the graph, so AUX must
+      // query the same compact spelling (e.g. `hk n` -> `hkn`) and map the
+      // result back to the original byte span below.
+      string compact_aux_input;
+      compact_aux_input.reserve(current_input.size());
+      for (size_t p = begin_pos; p < input.size(); ++p) {
+        if (delimiters_.find(input[p]) == string::npos)
+          compact_aux_input.push_back(input[p]);
+      }
+      auxiliary_lookup_(compact_aux_input, &aux_matches);
+      for (const auto& m : aux_matches) {
+        if (m.length == 0 || (!m.allowed_chars || m.allowed_chars->empty()) ||
+            m.syllable_id < 0)
+          continue;
+        graph->has_auxiliary = true;
+        // m.length is measured in the compact spelling.  Walk the original
+        // input and consume exactly that many non-delimiter bytes so a span
+        // such as `hk n` correctly ends at byte 4 rather than byte 3.
+        size_t end_pos = begin_pos;
+        size_t consumed = 0;
+        while (end_pos < input.size() && consumed < m.length) {
+          if (delimiters_.find(input[end_pos]) == string::npos) {
+            ++consumed;
+          }
+          ++end_pos;
+        }
+        if (consumed != m.length)
+          continue;
+        while (end_pos < input.size() &&
+               delimiters_.find(input[end_pos]) != string::npos)
+          ++end_pos;
+        graph->auxiliary_constraints.push_back(
+            {current_pos, end_pos, m.syllable_id, m.allowed_chars});
+        auto& spellings = graph->edges[current_pos][end_pos];
+        auto it = spellings.find(m.syllable_id);
+        if (it == spellings.end()) {
+          EdgeProperties props;
+          props.end_pos = end_pos;
+          props.has_normal = false;
+          props.auxiliary_chars = m.allowed_chars;
+          spellings.emplace(m.syllable_id, std::move(props));
+        } else {
+          auto merged = std::make_shared<std::set<string>>(
+              it->second.auxiliary_chars ? *it->second.auxiliary_chars
+                                         : std::set<string>{});
+          merged->insert(m.allowed_chars->begin(), m.allowed_chars->end());
+          it->second.auxiliary_chars = std::move(merged);
+        }
+        queue.push(Vertex{end_pos, vertex.second});
+      }
+    }
   }
 
   DLOG(INFO) << "remove stale vertices and edges";
@@ -206,7 +267,10 @@ int Syllabifier::BuildSyllableGraph(const string& input,
       if (j->second.empty()) {
         graph->edges[i].erase(j++);
       } else {
-        if (edge_type < kAbbreviation)
+        bool contains_aux = false;
+        for (const auto& spelling : j->second)
+          contains_aux |= bool(spelling.second.auxiliary_chars);
+        if (edge_type < kAbbreviation && !contains_aux)
           CheckOverlappedSpellings(graph, i, j->first);
         ++j;
       }
@@ -262,6 +326,33 @@ int Syllabifier::BuildSyllableGraph(const string& input,
         farthest = end_pos;
       }
     }
+  }
+
+  // A detected AUX prefix is only a constraint while its edge is part of a
+  // complete graph path.  A prefix that cannot consume the remaining input
+  // must not suppress ordinary candidates on the same span.
+  if (graph->has_auxiliary && farthest < input.length()) {
+    // An unconsumed suffix means no complete interpretation exists.  AUX
+    // prefixes must not turn a partial match into a hard candidate filter.
+    graph->auxiliary_constraints.clear();
+    graph->has_auxiliary = false;
+  } else if (graph->has_auxiliary) {
+    vector<AuxiliaryConstraint> live_constraints;
+    live_constraints.reserve(graph->auxiliary_constraints.size());
+    for (const auto& aux : graph->auxiliary_constraints) {
+      auto start = graph->edges.find(aux.start);
+      if (start == graph->edges.end())
+        continue;
+      auto end = start->second.find(aux.end);
+      if (end == start->second.end())
+        continue;
+      auto spelling = end->second.find(aux.syllable_id);
+      if (spelling == end->second.end() || !spelling->second.auxiliary_chars)
+        continue;
+      live_constraints.push_back(aux);
+    }
+    graph->auxiliary_constraints.swap(live_constraints);
+    graph->has_auxiliary = !graph->auxiliary_constraints.empty();
   }
 
   graph->input_length = input.length();
@@ -322,6 +413,96 @@ void Syllabifier::Transpose(SyllableGraph* graph) {
 
 void Syllabifier::EnableCorrection(Corrector* corrector) {
   corrector_ = corrector;
+}
+
+namespace {
+
+bool MatchesRecursive(const SyllableGraph& graph,
+                      const Code& code,
+                      const vector<string>& characters,
+                      size_t depth,
+                      size_t pos,
+                      size_t end,
+                      size_t code_size,
+                      std::map<std::pair<size_t, size_t>, bool>* memo) {
+  if (depth == code_size)
+    return pos == end;
+  auto state = std::make_pair(depth, pos);
+  auto hit = memo->find(state);
+  if (hit != memo->end())
+    return hit->second;
+  bool result = false;
+  auto s = graph.edges.find(pos);
+  if (s != graph.edges.end()) {
+    for (const auto& next : s->second) {
+      if (next.first > end)
+        continue;
+      auto e = next.second.find(code[depth]);
+      if (e == next.second.end())
+        continue;
+      const auto& props = e->second;
+      bool allowed = props.has_normal;
+      if (!allowed && depth < characters.size())
+        allowed = (props.auxiliary_chars &&
+                   props.auxiliary_chars->count(characters[depth]) != 0);
+      if (allowed && MatchesRecursive(graph, code, characters, depth + 1,
+                                      next.first, end, code_size, memo)) {
+        result = true;
+        break;
+      }
+    }
+  }
+  if (depth < characters.size()) {
+    for (const auto& aux : graph.auxiliary_constraints) {
+      if (aux.start != pos || aux.syllable_id != code[depth] || aux.end > end ||
+          !aux.allowed_chars || !aux.allowed_chars->count(characters[depth]))
+        continue;
+      if (MatchesRecursive(graph, code, characters, depth + 1, aux.end, end,
+                           code_size, memo)) {
+        result = true;
+        break;
+      }
+    }
+  }
+  (*memo)[state] = result;
+  return result;
+}
+
+}  // namespace
+
+bool SyllableGraphMatches(const SyllableGraph& graph,
+                          const Code& code,
+                          const string& text,
+                          size_t start,
+                          size_t end,
+                          size_t depth_limit) {
+  size_t code_size =
+      depth_limit ? std::min(depth_limit, code.size()) : code.size();
+  vector<string> characters;
+  auto cur = text.begin();
+  while (cur != text.end()) {
+    auto begin = cur;
+    utf8::next(cur, text.end());
+    characters.emplace_back(begin, cur);
+  }
+  std::map<std::pair<size_t, size_t>, bool> memo;
+  // An AUX prefix is a candidate-path constraint, not a score bonus.  When
+  // the candidate pool is being evaluated at the exact AUX span, ordinary
+  // abbreviation paths must be removed from that pool.
+  bool exact_aux_span = false;
+  for (const auto& aux : graph.auxiliary_constraints) {
+    if (aux.start != start || aux.end != end)
+      continue;
+    exact_aux_span = true;
+    if (code_size == 1 && characters.size() == 1 &&
+        aux.syllable_id == code[0] && aux.allowed_chars &&
+        aux.allowed_chars->count(characters[0]))
+      return true;
+  }
+  if (exact_aux_span)
+    return false;
+  return MatchesRecursive(graph, code, characters, 0, start, end, code_size,
+                          &memo);
 }
 
 }  // namespace rime

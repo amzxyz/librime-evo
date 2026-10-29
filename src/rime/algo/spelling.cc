@@ -13,6 +13,10 @@ void SpellingProperties::Compose(const SpellingProperties& delta) {
   if (delta.is_correction) {
     is_correction = true;
   }
+  auxiliary = auxiliary || delta.auxiliary;
+  if (!delta.auxiliary_characters.empty()) {
+    auxiliary_characters = delta.auxiliary_characters;
+  }
 
   if (!delta.tips.empty()) {
     tips = delta.tips;
@@ -23,6 +27,10 @@ void SpellingProperties::Update(const SpellingProperties& other) {
   // 類型相同, 以權重高者爲主, 同步糾錯標記
   if (type == other.type) {
     is_correction = is_correction && other.is_correction;
+  }
+  auxiliary = auxiliary || other.auxiliary;
+  if (!other.auxiliary_characters.empty()) {
+    auxiliary_characters = other.auxiliary_characters;
   }
   // 採納更優的類型
   else if (other.type < type) {

@@ -56,12 +56,12 @@ void EntryCollector::LoadPresetVocabulary(DictSettings* settings) {
 
 void EntryCollector::Collect(const path& dict_file) {
   LOG(INFO) << "collecting entries from " << dict_file;
-  current_dict_file = dict_file.to_utf8_string();
+  current_dict_file = dict_file.u8string();
   line_number = 0;
   // read table
   std::ifstream fin(dict_file.c_str());
   DictSettings settings;
-  if (!settings.LoadDictHeader(fin)) {
+  if (!settings.LoadDictHeader(fin, true)) {
     LOG(ERROR) << "missing dict settings.";
     return;
   }

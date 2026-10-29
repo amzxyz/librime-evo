@@ -216,3 +216,25 @@ TEST(RimeCalculusTest, ReorderParseValidation) {
   EXPECT_NE(calc.Parse("reorder zyx"), nullptr);
   EXPECT_NE(calc.Parse("reorder zyx dedup"), nullptr);
 }
+
+TEST(RimeCalculusTest, AuxiliaryPropertyWithoutWeightPenalty) {
+  rime::Calculus calc;
+  rime::the<rime::Calculation> c(calc.Parse("aux|^([^;]+);([a-z]).*$|$1$2|"));
+  ASSERT_TRUE(bool(c));
+  rime::Spelling s("ab;cd");
+  ASSERT_TRUE(c->Apply(&s));
+  EXPECT_EQ("abc", s.str);
+  EXPECT_TRUE(s.properties.auxiliary);
+  EXPECT_EQ(rime::kNormalSpelling, s.properties.type);
+  EXPECT_DOUBLE_EQ(0.0, s.properties.credibility);
+}
+
+TEST(RimeCalculusTest, AuxiliaryKeepsAnExplicitUnchangedVariant) {
+  rime::Calculus calc;
+  rime::the<rime::Calculation> c(calc.Parse("aux|^([a-z]{2})$|$1|"));
+  ASSERT_TRUE(bool(c));
+  rime::Spelling s("cd");
+  ASSERT_TRUE(c->Apply(&s));
+  EXPECT_EQ("cd", s.str);
+  EXPECT_TRUE(s.properties.auxiliary);
+}

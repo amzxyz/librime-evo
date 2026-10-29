@@ -122,6 +122,37 @@ CodeMatch match_extra_code(const table::Code* extra_code,
   return best_match;
 }
 
+// In an AUX graph, keep all viable tail positions. The ordinary path can
+// still use the original best-match fast path.
+void collect_extra_code_matches(const table::Code* extra_code,
+                                size_t depth,
+                                const SyllableGraph& graph,
+                                size_t pos,
+                                bool predict_word,
+                                std::set<std::pair<size_t, size_t>>* matches,
+                                std::set<std::pair<size_t, size_t>>* seen) {
+  if (!seen->insert({depth, pos}).second)
+    return;
+  if (depth >= extra_code->size) {
+    matches->insert({depth, pos});
+    return;
+  }
+  if (pos >= graph.interpreted_length) {
+    if (predict_word)
+      matches->insert({depth, graph.interpreted_length});
+    return;
+  }
+  auto it = graph.indices.find(pos);
+  if (it == graph.indices.end())
+    return;
+  auto found = it->second.find(extra_code->at[depth]);
+  if (found == it->second.end())
+    return;
+  for (const auto* edge : found->second)
+    collect_extra_code_matches(extra_code, depth + 1, graph, edge->end_pos,
+                               predict_word, matches, seen);
+}
+
 }  // namespace dictionary
 
 DictEntryIterator::DictEntryIterator()
@@ -253,13 +284,30 @@ static void lookup_table(Table* table,
       double q = a.quality_len();
       if (a.extra_code()) {
         do {
-          dictionary::CodeMatch match = dictionary::match_extra_code(
-              a.extra_code(), 0, syllable_graph, end_pos, predict_word);
-          if (!match.success)
+          if (!syllable_graph.has_auxiliary) {
+            dictionary::CodeMatch match = dictionary::match_extra_code(
+                a.extra_code(), 0, syllable_graph, end_pos, predict_word);
+            if (!match.success)
+              continue;
+            size_t matching_code_size = a.index_code().size() + match.depth;
+            (*collector)[match.end_pos].AddChunk(
+                {table, a.code(), a.entry(), matching_code_size, cr});
             continue;
-          size_t matching_code_size = a.index_code().size() + match.depth;
-          (*collector)[match.end_pos].AddChunk(
-              {table, a.code(), a.entry(), matching_code_size, cr, q});
+          }
+          std::set<std::pair<size_t, size_t>> matches, seen;
+          dictionary::collect_extra_code_matches(a.extra_code(), 0,
+                                                 syllable_graph, end_pos,
+                                                 predict_word, &matches, &seen);
+          const Code code = a.code();
+          const string text = table->GetEntryText(*a.entry());
+          for (const auto& match : matches) {
+            size_t matching = a.index_code().size() + match.first;
+            if (!SyllableGraphMatches(syllable_graph, code, text, start_pos,
+                                      match.second, matching))
+              continue;
+            (*collector)[match.second].AddChunk(
+                {table, code, a.entry(), matching, cr, q});
+          }
         } while (a.Next());
       } else {
         (*collector)[end_pos].AddChunk({table, a, cr, q});

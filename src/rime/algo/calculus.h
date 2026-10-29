@@ -107,6 +107,13 @@ class Reorder : public Calculation {
   bool dedup_;
 };
 
+// aux/pattern/replacement/: keep the original spelling, add an AUX hit.
+class Auxiliary : public Derivation {
+ public:
+  static Factory Parse;
+  bool Apply(Spelling* spelling);
+};
+
 }  // namespace rime
 
 #endif  // RIME_CALCULUS_H_

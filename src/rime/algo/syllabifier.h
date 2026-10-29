@@ -9,6 +9,8 @@
 #define RIME_SYLLABIFIER_H_
 
 #include <stdint.h>
+#include <functional>
+#include <set>
 #include <rime_api.h>
 #include <rime/common.h>
 #include "spelling.h"
@@ -26,6 +28,8 @@ struct EdgeProperties : SpellingProperties {
   EdgeProperties() = default;
   // 切分歧義編碼段的起始位置
   set<size_t> ambiguous_source_positions;
+  bool has_normal = true;
+  std::shared_ptr<const std::set<string>> auxiliary_chars;
 };
 
 using SpellingMap = map<SyllableId, EdgeProperties>;
@@ -37,12 +41,30 @@ using SpellingPropertiesList = vector<const EdgeProperties*>;
 using SpellingIndex = map<SyllableId, SpellingPropertiesList>;
 using SpellingIndices = map<size_t, SpellingIndex>;
 
+struct AuxGraphMatch {
+  size_t length = 0;
+  SyllableId syllable_id = -1;
+  std::shared_ptr<const std::set<string>> allowed_chars;
+};
+
+struct AuxiliaryConstraint {
+  size_t start = 0;
+  size_t end = 0;
+  SyllableId syllable_id = -1;
+  std::shared_ptr<const std::set<string>> allowed_chars;
+};
+
+using AuxMatchProvider =
+    std::function<void(const string&, vector<AuxGraphMatch>*)>;
+
 struct SyllableGraph {
+  bool has_auxiliary = false;
   size_t input_length = 0;
   size_t interpreted_length = 0;
   VertexMap vertices;
   EdgeMap edges;
   SpellingIndices indices;
+  vector<AuxiliaryConstraint> auxiliary_constraints;
 };
 
 class Syllabifier {
@@ -61,6 +83,9 @@ class Syllabifier {
                                   Prism& prism,
                                   SyllableGraph* graph);
   RIME_DLL void EnableCorrection(Corrector* corrector);
+  void SetAuxiliaryLookup(AuxMatchProvider lookup) {
+    auxiliary_lookup_ = std::move(lookup);
+  }
 
  protected:
   void CheckOverlappedSpellings(SyllableGraph* graph, size_t start, size_t end);
@@ -71,7 +96,18 @@ class Syllabifier {
   bool strict_spelling_ = false;
   Projection* canonicalizer_ = nullptr;
   Corrector* corrector_ = nullptr;
+  AuxMatchProvider auxiliary_lookup_;
 };
+
+class Code;
+// Verify that there exists a full path whose AUX constraints match word
+// positions.
+RIME_DLL bool SyllableGraphMatches(const SyllableGraph& graph,
+                                   const Code& code,
+                                   const string& text,
+                                   size_t start,
+                                   size_t end,
+                                   size_t depth_limit = 0);
 
 }  // namespace rime
 
