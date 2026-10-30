@@ -19,6 +19,7 @@ namespace rime {
 class Code;
 class Corrector;
 class AuxiliaryMatcher;
+class ReverseLookupDictionary;
 struct DictEntry;
 class Dictionary;
 class Poet;
@@ -30,6 +31,7 @@ class ScriptTranslator : public Translator,
                          public TranslatorOptions {
  public:
   ScriptTranslator(const Ticket& ticket);
+  ~ScriptTranslator() override;
 
   virtual an<Translation> Query(const string& input,
                                 const Segment& segment) override;
@@ -68,8 +70,11 @@ class ScriptTranslator : public Translator,
   bool enable_correction_ = false;
   bool enable_word_completion_ = false;
   the<Projection> canonicalizer_;
+  the<Projection> auxiliary_algebra_;
   the<Corrector> corrector_;
   std::shared_ptr<AuxiliaryMatcher> auxiliary_matcher_;
+  the<ReverseLookupDictionary> auxiliary_reverse_;
+  string auxiliary_suffix_trigger_ = "`";
   bool auxiliary_mode_ = false;
   string auxiliary_option_;
   the<Poet> poet_;

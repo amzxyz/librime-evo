@@ -24,79 +24,14 @@
 #include <utf8.h>
 #include <rime/dict/corrector.h>
 #include <rime/dict/dictionary.h>
+#include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/gear/poet.h>
+#include <rime/gear/auxiliary_matcher.h>
 #include <rime/gear/script_translator.h>
 #include <rime/gear/translator_commons.h>
 
 namespace rime {
-
-// Auxiliary matcher: Prism determines whether the input is AUX.
-// The existing single-character table determines the allowed text.
-class AuxiliaryMatcher {
- public:
-  explicit AuxiliaryMatcher(Dictionary* primary) : auxiliary_(primary) {
-    if (!primary || !primary->loaded())
-      return;
-    Syllabary syllables;
-    if (primary->primary_table()->GetSyllabary(&syllables)) {
-      SyllableId id = 0;
-      for (const auto& syllable : syllables)
-        main_ids_[syllable] = id++;
-    }
-  }
-
-  void Lookup(const string& input, vector<AuxGraphMatch>* result) {
-    if (!auxiliary_ || !result || input.empty())
-      return;
-    vector<Prism::Match> matches;
-    auxiliary_->prism()->CommonPrefixSearch(input, &matches);
-    for (const auto& match : matches) {
-      for (auto accessor = auxiliary_->prism()->QuerySpelling(match.value);
-           !accessor.exhausted(); accessor.Next()) {
-        if (!accessor.properties().auxiliary)
-          continue;
-        auto id = accessor.syllable_id();
-        const auto base_code = auxiliary_->primary_table()->GetSyllableById(id);
-        auto base = main_ids_.find(base_code);
-        if (base == main_ids_.end())
-          continue;
-        const string& chars = accessor.properties().auxiliary_characters;
-        if (chars.empty())
-          continue;
-        // The Prism descriptor is only an AUX projection.  Confirm that the
-        // corresponding pure syllable still has a real single-character
-        // Table entry before it is allowed to create a graph constraint.
-        auto table_words =
-            auxiliary_->primary_table()->QueryWords(base->second);
-        if (table_words.exhausted())
-          continue;
-        auto permitted = permitted_chars_.find(chars);
-        if (permitted == permitted_chars_.end()) {
-          std::set<string> allowed;
-          for (auto p = chars.begin(); p != chars.end();) {
-            auto begin = p;
-            utf8::next(p, chars.end());
-            allowed.emplace(begin, p);
-          }
-          permitted =
-              permitted_chars_
-                  .emplace(chars, std::make_shared<const std::set<string>>(
-                                      std::move(allowed)))
-                  .first;
-        }
-        if (!permitted->second->empty()) {
-          result->push_back({match.length, base->second, permitted->second});
-        }
-      }
-    }
-  }
-
- private:
-  Dictionary* auxiliary_;
-  map<string, SyllableId> main_ids_;
-  map<string, std::shared_ptr<const std::set<string>>> permitted_chars_;
-};
 
 // static const char* quote_left = "\xef\xbc\x88";
 // static const char* quote_right = "\xef\xbc\x89";
@@ -213,7 +148,8 @@ class ScriptTranslation : public Translation {
                     size_t start,
                     size_t end_of_input,
                     int max_sentences,
-                    double sentence_cutoff_threshold)
+                    double sentence_cutoff_threshold,
+                    const string& auxiliary_suffix)
       : translator_(translator),
         poet_(poet),
         start_(start),
@@ -227,7 +163,8 @@ class ScriptTranslation : public Translation {
                                             : nullptr)),
         enable_correction_(corrector),
         max_sentences_(max_sentences),
-        sentence_cutoff_threshold_(sentence_cutoff_threshold) {
+        sentence_cutoff_threshold_(sentence_cutoff_threshold),
+        auxiliary_suffix_(auxiliary_suffix) {
     set_exhausted(true);
   }
   bool Evaluate(Dictionary* dict, UserDictionary* user_dict);
@@ -277,6 +214,7 @@ class ScriptTranslation : public Translation {
   double sentence_cutoff_threshold_ = 0.1;
 
   bool enable_correction_;
+  string auxiliary_suffix_;
 };
 
 // ScriptTranslator implementation
@@ -304,9 +242,16 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
         canonicalizer_ = std::move(canonicalizer);
       }
     }
+    if (an<ConfigList> rules = config->GetList("speller/aux_algebra")) {
+      the<Projection> auxiliary_algebra(new Projection());
+      if (auxiliary_algebra->Load(rules)) {
+        auxiliary_algebra_ = std::move(auxiliary_algebra);
+      }
+    }
     auxiliary_mode_ = true;
     config->GetBool(name_space_ + "/auxiliary_mode", &auxiliary_mode_);
     config->GetString(name_space_ + "/auxiliary_option", &auxiliary_option_);
+    config->GetString(name_space_ + "/aux_suffix", &auxiliary_suffix_trigger_);
   }
   if (enable_correction_) {
     if (auto* corrector = Corrector::Require("corrector")) {
@@ -315,29 +260,54 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
   }
 }
 
+ScriptTranslator::~ScriptTranslator() = default;
+
 an<Translation> ScriptTranslator::Query(const string& input,
                                         const Segment& segment) {
   if (!dict_ || !dict_->loaded())
     return nullptr;
   if (!segment.HasAnyTagIn(tags_))
     return nullptr;
+
   DLOG(INFO) << "input = '" << input << "', [" << segment.start << ", "
              << segment.end << ")";
 
   FinishSession();
 
   if (!auxiliary_matcher_ && dict_->prism()->SupportsAuxiliaryCharacters()) {
-    auxiliary_matcher_ = std::make_shared<AuxiliaryMatcher>(dict_.get());
+    if (auto component =
+            ReverseLookupDictionary::Require("reverse_lookup_dictionary")) {
+      Ticket ticket(engine_, name_space_);
+      auxiliary_reverse_.reset(component->Create(ticket));
+      if (auxiliary_reverse_ && !auxiliary_reverse_->Load())
+        auxiliary_reverse_.reset();
+    }
+    auxiliary_matcher_ = std::make_shared<AuxiliaryMatcher>(
+        dict_.get(), auxiliary_reverse_.get());
+  }
+
+  string auxiliary_suffix;
+  const string& full_input = engine_->context()->input();
+  if (segment.HasTag("auxiliary_suffix") &&
+      full_input.size() > segment.end + auxiliary_suffix_trigger_.size() &&
+      full_input.compare(segment.end, auxiliary_suffix_trigger_.size(),
+                         auxiliary_suffix_trigger_) == 0) {
+    auxiliary_suffix =
+        full_input.substr(segment.end + auxiliary_suffix_trigger_.size());
+    if (auxiliary_algebra_)
+      auxiliary_algebra_->Apply(&auxiliary_suffix);
   }
 
   bool enable_user_dict =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
 
-  size_t end_of_input = engine_->context()->input().length();
+  size_t end_of_input = auxiliary_suffix.empty()
+                            ? engine_->context()->input().length()
+                            : segment.end;
   // the translator should survive translations it creates
   auto result = New<ScriptTranslation>(
       this, corrector_.get(), poet_.get(), input, segment.start, end_of_input,
-      max_sentences_, sentence_cutoff_threshold_);
+      max_sentences_, sentence_cutoff_threshold_, auxiliary_suffix);
   if (!result || !result->Evaluate(
                      dict_.get(), enable_user_dict ? user_dict_.get() : NULL)) {
     return nullptr;
@@ -595,6 +565,25 @@ static void FilterAuxiliaryEntries(const an<Collector>& collector,
   }
 }
 
+template <class Collector>
+static void FilterAuxiliarySuffixEntries(
+    const an<Collector>& collector,
+    const std::shared_ptr<AuxiliaryMatcher>& matcher,
+    const string& suffix) {
+  if (!collector || !matcher || suffix.empty())
+    return;
+  for (auto it = collector->begin(); it != collector->end();) {
+    it->second.AddFilter([matcher, suffix](an<DictEntry> entry) {
+      const bool keep = entry && matcher->Match(entry->text, suffix);
+      return keep;
+    });
+    if (it->second.exhausted())
+      it = collector->erase(it);
+    else
+      ++it;
+  }
+}
+
 // ScriptTranslation implementation
 
 bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
@@ -615,6 +604,12 @@ bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
   if (syllabifier_->auxiliary_active()) {
     FilterAuxiliaryEntries(phrase_, syllable_graph, 0);
     FilterAuxiliaryEntries(user_phrase_, syllable_graph, 0);
+  }
+  if (!auxiliary_suffix_.empty()) {
+    FilterAuxiliarySuffixEntries(phrase_, translator_->auxiliary_matcher(),
+                                 auxiliary_suffix_);
+    FilterAuxiliarySuffixEntries(user_phrase_, translator_->auxiliary_matcher(),
+                                 auxiliary_suffix_);
   }
   if ((!phrase_ || phrase_->empty()) &&
       (!user_phrase_ || user_phrase_->empty()))
@@ -655,6 +650,15 @@ bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
         sentences_ = {sentence};
       else
         sentences_.clear();
+    }
+  }
+  if (!auxiliary_suffix_.empty() && translator_->auxiliary_matcher()) {
+    for (auto it = sentences_.begin(); it != sentences_.end();) {
+      if (!translator_->auxiliary_matcher()->Match((*it)->text(),
+                                                   auxiliary_suffix_))
+        it = sentences_.erase(it);
+      else
+        ++it;
     }
   }
 

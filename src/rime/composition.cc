@@ -102,6 +102,7 @@ string Composition::GetPrompt() const {
 string Composition::GetCommitText() const {
   string result;
   size_t end = 0;
+  bool auxiliary_suffix = false;
   for (const Segment& seg : *this) {
     if (auto cand = seg.GetSelectedCandidate()) {
       end = cand->end();
@@ -112,8 +113,13 @@ string Composition::GetCommitText() const {
         result += input_.substr(seg.start, seg.end - seg.start);
       }
     }
+    if (seg.HasTag("auxiliary_suffix")) {
+      auxiliary_suffix = true;
+      end = input_.length();
+      break;
+    }
   }
-  if (input_.length() > end) {
+  if (!auxiliary_suffix && input_.length() > end) {
     result += input_.substr(end);
   }
   return result;
@@ -123,6 +129,7 @@ string Composition::GetScriptText(bool keep_selection) const {
   string result;
   size_t start = 0;
   size_t end = 0;
+  bool auxiliary_suffix = false;
   for (const Segment& seg : *this) {
     auto cand = seg.GetSelectedCandidate();
     start = end;
@@ -134,8 +141,13 @@ string Composition::GetScriptText(bool keep_selection) const {
       result += boost::erase_first_copy(cand->preedit(), "\t");
     else if (!seg.HasTag("phony"))
       result += input_.substr(start, end - start);
+    if (seg.HasTag("auxiliary_suffix")) {
+      auxiliary_suffix = true;
+      end = input_.length();
+      break;
+    }
   }
-  if (input_.length() > end) {
+  if (!auxiliary_suffix && input_.length() > end) {
     result += input_.substr(end);
   }
   return result;
