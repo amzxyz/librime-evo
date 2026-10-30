@@ -85,7 +85,6 @@ if %clean% == 1 (
   rmdir /s /q deps\googletest\%build_dir%
   rmdir /s /q deps\leveldb\%build_dir%
   rmdir /s /q deps\marisa-trie\%build_dir%
-  rmdir /s /q deps\opencc\%build_dir%
   rmdir /s /q deps\yaml-cpp\%build_dir%
 )
 
@@ -165,14 +164,6 @@ if %build_deps% == 1 (
   if errorlevel 1 goto error
   popd
 
-  echo building opencc.
-  pushd deps\opencc
-  cmake . -B%build_dir% %deps_cmake_flags%^
-  -DBUILD_TESTING=OFF
-  if errorlevel 1 goto error
-  cmake --build %build_dir% --config %build_config% --target install
-  if errorlevel 1 goto error
-  popd
 )
 
 if %build_librime% == 0 goto exit

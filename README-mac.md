@@ -97,12 +97,6 @@ make deps
 This builds libraries located at `librime/deps/*`, and installs the build
 artifacts to `librime/include`, `librime/lib` and `librime/bin`.
 
-You can also build an individual library, eg. `opencc`, with:
-
-``` sh
-make deps/opencc
-```
-
 ### Build librime
 
 ``` sh

@@ -10,7 +10,7 @@ endif
 build ?= build
 prefix ?= $(rime_root)
 
-rime_deps = glog googletest leveldb marisa-trie opencc yaml-cpp
+rime_deps = glog googletest leveldb marisa-trie yaml-cpp
 
 .PHONY: all clean clean-dist clean-src $(rime_deps)
 
@@ -66,14 +66,6 @@ marisa-trie:
 	-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON \
 	-DBUILD_TESTING:BOOL=OFF \
 	-DENABLE_TOOLS:BOOL=OFF \
-	&& cmake --build $(build) --target install
-
-opencc:
-	cd $(src_dir)/opencc; \
-	cmake . -B$(build) \
-	-DBUILD_SHARED_LIBS:BOOL=OFF \
-	-DCMAKE_BUILD_TYPE:STRING="Release" \
-	-DCMAKE_INSTALL_PREFIX:PATH="$(prefix)" \
 	&& cmake --build $(build) --target install
 
 yaml-cpp:

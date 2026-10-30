@@ -50,8 +50,6 @@ Features
     built on top of open-source technologies
   - Covering features found in a large variety of Chinese input methods,
     either shape-based or phonetic-based
-  - Built with native support for Traditional Chinese, conversion to Simplified
-    Chinese and other regional standards via OpenCC
   - Rime input schema, a DSL in YAML syntax for fast trying out innovative ideas
     of input method design
   - Spelling Algebra, a mechanism to create variant spelling, especially useful
@@ -72,7 +70,6 @@ Build dependencies
   - libglog>=0.7 (optional)
   - libleveldb
   - libmarisa
-  - libopencc>=1.0.2
   - libyaml-cpp>=0.5
   - libgtest (optional)
 
@@ -82,7 +79,6 @@ Runtime dependencies
   - libglog (optional)
   - libleveldb
   - libmarisa
-  - libopencc
   - libyaml-cpp
 
 Build and install on Linux
@@ -156,7 +152,6 @@ We are grateful to the makers of the following open source libraries:
   - [Google Test](https://github.com/google/googletest) (The 3-Clause BSD License)
   - [LevelDB](https://github.com/google/leveldb) (The 3-Clause BSD License)
   - [marisa-trie](https://github.com/s-yata/marisa-trie) (BSD 2-Clause License, LGPL 2.1)
-  - [OpenCC](https://github.com/BYVoid/OpenCC) (Apache License 2.0)
   - [yaml-cpp](https://github.com/jbeder/yaml-cpp) (MIT License)
 
 Contributors

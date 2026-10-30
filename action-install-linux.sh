@@ -5,7 +5,6 @@ dep_packages=(
     libleveldb-dev
     libmarisa-dev
     libyaml-cpp-dev
-    libopencc-dev
     libgtest-dev
 )
 

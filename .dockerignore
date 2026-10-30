@@ -14,5 +14,4 @@ share/*
 include/leveldb/
 include/marisa/
 include/marisa.h
-include/opencc/
 include/yaml-cpp/

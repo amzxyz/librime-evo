@@ -16,8 +16,6 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
   libyaml-cpp-dev \
   libleveldb-dev \
   libmarisa-dev \
-  libopencc-dev \
-  liblua5.4-dev \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /librime
@@ -25,7 +23,6 @@ COPY . .
 
 RUN bash install-plugins.sh \
   rime/librime-charcode \
-  hchunhui/librime-lua \
   lotem/librime-octagram \
   rime/librime-predict
 

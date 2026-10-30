@@ -11,8 +11,6 @@ tools and libraries:
 
 Boost and cmake versions need to match higher VS version.
 
-[Python](https://python.org)>=2.7 is needed to build opencc dictionaries.
-
 ## Get the code
 
 ``` batch

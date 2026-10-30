@@ -53,8 +53,7 @@ set(rime_dict_deps
     ${LevelDb_LIBRARY}
     ${Marisa_LIBRARY})
 set(rime_gears_deps
-    ${ICU_LIBRARIES}
-    ${Opencc_LIBRARY})
+    ${ICU_LIBRARIES})
 set(rime_levers_deps "")
 
 if(Glog_FOUND AND WIN32)
@@ -173,4 +172,13 @@ endif()
 if(DEFINED RIME_SETUP_EXTRA_MODULES)
   target_compile_definitions(${rime_library} PRIVATE
     "RIME_EXTRA_MODULES=${RIME_SETUP_EXTRA_MODULES}")
+endif()
+
+if(WIN32 AND BUILD_SHARED_LIBS AND BUILD_TEST)
+  set_target_properties(${rime_library}
+    PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+  if(MINGW)
+    set_property(TARGET ${rime_library} APPEND_STRING
+      PROPERTY LINK_FLAGS " -Wl,--export-all-symbols")
+  endif()
 endif()
