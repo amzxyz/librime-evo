@@ -18,6 +18,7 @@
 #include <rime/gear/fallback_segmentor.h>
 #include <rime/gear/history_translator.h>
 #include <rime/gear/key_binder.h>
+#include <rime/gear/keypad_processor.h>
 #include <rime/gear/matcher.h>
 #include <rime/gear/navigator.h>
 #include <rime/gear/punctuator.h>
@@ -51,6 +52,7 @@ static void rime_gears_initialize() {
   r.Register("fluid_editor", new Component<FluidEditor>);
   r.Register("fluency_editor", new Component<FluidEditor>);  // alias
   r.Register("key_binder", new Component<KeyBinder>);
+  r.Register("keypad_processor", new Component<KeypadProcessor>);
   r.Register("navigator", new Component<Navigator>);
   r.Register("punctuator", new Component<Punctuator>);
   r.Register("recognizer", new Component<Recognizer>);
