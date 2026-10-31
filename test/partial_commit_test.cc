@@ -51,8 +51,10 @@ class PartialCommitTest : public ::testing::Test {
 
     engine_->context()->set_input("abcdef");
     Composition& composition = engine_->context()->composition();
-    composition.Reset(1);
-    composition[0] = Segment(0, 6);
+    // Reset(size_t) only shrinks an existing segmentation; it never creates
+    // the first segment.  Build the synthetic test segment explicitly.
+    composition.clear();
+    composition.emplace_back(0, 6);
     composition[0].status = Segment::kGuess;
     composition[0].menu = menu;
   }
