@@ -65,7 +65,7 @@ Follow the instructions to build librime on platforms other than Linux:
 Build dependencies
 ---
   - compiler with C++17 support
-  - cmake>=3.12
+  - cmake>=3.25
   - libboost>=1.74
   - libleveldb
   - libmarisa
