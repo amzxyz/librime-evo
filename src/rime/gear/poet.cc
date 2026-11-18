@@ -153,8 +153,7 @@ struct BeamSearch {
   }
 
   static Line& BestLineToUpdate(State& state, const Line& new_line) {
-    const auto& key = new_line.last_word();
-    return state[key];
+    return state[new_line.entry->text];
   }
 
   static const Line& BestLineInState(const State& final_state,
@@ -208,6 +207,11 @@ an<Sentence> Poet::MakeSentenceWithStrategy(const WordGraph& graph,
     const auto update = [this, &states, &sv, start_pos, total_length,
                          &initial_context,
                          boundary_grammar](const Line& candidate) {
+      const bool starts_sentence = candidate.empty();
+      const string& context =
+          starts_sentence ? initial_context : candidate.context();
+      Grammar* scorer = starts_sentence && boundary_grammar ? boundary_grammar
+                                                            : grammar_.get();
       for (const auto& ev : sv.second) {
         size_t end_pos = ev.first;
         if (start_pos == 0 && end_pos == total_length)
@@ -218,11 +222,6 @@ an<Sentence> Poet::MakeSentenceWithStrategy(const WordGraph& graph,
         // extend candidates with dict entries on a valid edge.
         const DictEntryList& entries = ev.second;
         for (const auto& entry : entries) {
-          const string& context =
-              candidate.empty() ? initial_context : candidate.context();
-          Grammar* scorer = candidate.empty() && boundary_grammar
-                                ? boundary_grammar
-                                : grammar_.get();
           double weight = candidate.weight +
                           Grammar::Evaluate(context, entry->text, entry->weight,
                                             is_rear, scorer);
@@ -294,15 +293,21 @@ deque<an<Sentence>> Poet::MakeSentences(const WordGraph& graph,
       auto& target_state = states[end_pos];
 
       for (const auto& source_line : source_state) {
+        const bool starts_sentence = source_line.empty();
+        const string& context =
+            starts_sentence ? initial_context : source_line.context();
+        Grammar* scorer = starts_sentence && boundary_grammar ? boundary_grammar
+                                                              : grammar_.get();
         for (const auto& entry : entries) {
-          const string& context =
-              source_line.empty() ? initial_context : source_line.context();
-          Grammar* scorer = source_line.empty() && boundary_grammar
-                                ? boundary_grammar
-                                : grammar_.get();
           double weight = source_line.weight +
                           Grammar::Evaluate(context, entry->text, entry->weight,
                                             is_rear, scorer);
+          // A full beam keeps earlier ties. A line below this cutoff also
+          // cannot improve any duplicate already in the beam.
+          if (!target_state.empty() && target_state.size() == beam_width &&
+              weight <= target_state.back().weight) {
+            continue;
+          }
           size_t new_hash = source_line.text_hash;
           for (char c : entry->text) {
             new_hash = new_hash * 31 + c;
