@@ -63,11 +63,11 @@ TEST_F(RimeDictionaryTest, PredictiveLookup) {
   rime::DictEntryIterator it;
   dict_->LookupWords(&it, "z", true);
   ASSERT_FALSE(it.exhausted());
-  EXPECT_EQ("\xe5\x92\x8b", it.Peek()->text);  // 咋
+  EXPECT_EQ("\xe5\x88\x99", it.Peek()->text);  // 则
   ASSERT_EQ(1, it.Peek()->code.size());
   rime::RawCode raw_code;
   ASSERT_TRUE(dict_->Decode(it.Peek()->code, &raw_code));
-  EXPECT_EQ("za", raw_code.ToString());
+  EXPECT_EQ("ze", raw_code.ToString());
 }
 
 TEST_F(RimeDictionaryTest, ScriptLookup) {
@@ -189,8 +189,8 @@ void ExpectBestFirst(rime::Dictionary* dictionary,
     rime::RawCode spelling;
     ASSERT_TRUE(dictionary->Decode(entry->code, &spelling));
     EXPECT_TRUE(seen.emplace(entry->text, spelling.ToString()).second);
-    // LookupWords preserves the first matching key before heap ordering begins.
-    if (count > 1) {
+    // Predictive LookupWords now ranks the first candidate as well.
+    if (count > 0) {
       if (previous->remaining_code_length == entry->remaining_code_length)
         EXPECT_GE(previous->weight, entry->weight);
       else

@@ -4,6 +4,7 @@
 //
 // 2011-07-05 GONG Chen <chen.sst@gmail.com>
 //
+#include <algorithm>
 #include <filesystem>
 #include <rime/algo/syllabifier.h>
 #include <rime/common.h>
@@ -88,6 +89,7 @@ struct Chunk {
 struct QueryResult {
   vector<Chunk> chunks;
   bool is_heap = false;
+  bool sort_on_peek = false;  // Only predictive LookupWords() needs initial rank.
   size_t next_order = 0;
 };
 
@@ -254,6 +256,10 @@ void DictEntryIterator::AddChunk(dictionary::Chunk&& chunk) {
   query_result_->is_heap = false;
 }
 
+void DictEntryIterator::EnableInitialSorting() {
+  query_result_->sort_on_peek = true;
+}
+
 void DictEntryIterator::Sort() {
   if (ordered_mode_ || exhausted() || query_result_->is_heap)
     return;
@@ -394,6 +400,10 @@ an<DictEntry> DictEntryIterator::Peek() {
                ? ordered_entries_[ordered_index_]
                : nullptr;
   if (!entry_ && !exhausted()) {
+    // Predictive lookups rank the first candidate as well; exact lookups
+    // and script lookups retain their existing lazy heap behavior.
+    if (query_result_->sort_on_peek && !query_result_->is_heap)
+      Sort();
     // get next entry from current chunk
     const auto& chunk = query_result_->chunks[chunk_index_];
     const auto& e = chunk.entries[chunk.cursor];
@@ -473,6 +483,15 @@ bool DictEntryIterator::Skip(size_t num_entries) {
     }
     ordered_index_ += num_entries;
     return true;
+  }
+  // Skip() counts entries in original chunk insertion order, even if Peek()
+  // previously constructed a ranking heap. Restore the remaining chunks.
+  if (query_result_->is_heap) {
+    auto& chunks = query_result_->chunks;
+    std::sort(chunks.begin() + chunk_index_, chunks.end(),
+              [](const dictionary::Chunk& a, const dictionary::Chunk& b) {
+                return a.order < b.order;
+              });
   }
   query_result_->is_heap = false;
   while (num_entries > 0) {
@@ -693,6 +712,10 @@ size_t Dictionary::LookupWords(DictEntryIterator* result,
       }
     }
   }
+  // Lazy completion can Skip() entries without showing them first.
+  // Defer initial sorting to Peek() and leave exact lookup untouched.
+  if (predictive)
+    result->EnableInitialSorting();
   if (blacklist && !blacklist->empty()) {
     result->AddFilter([blacklist](an<DictEntry> entry) {
       return entry && !blacklist->count(entry->text);
