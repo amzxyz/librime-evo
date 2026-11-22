@@ -14,6 +14,7 @@
 #include <rime/dict/prism.h>
 #include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/table.h>
+#include <rime/gear/reverse_lookup_weight.h>
 #include <fstream>
 #include <string>
 
@@ -99,6 +100,61 @@ TEST(ReverseLookupDictionary, BuildsAndReloadsEntriesAndStems) {
   EXPECT_FALSE(dictionary.ReverseLookup("stem-only", &result));
   EXPECT_FALSE(dictionary.LookupStems("other", &result));
   db->Remove();
+}
+
+TEST(ReverseLookupDictionary, SortsReadingsAcrossEvoSupplementTables) {
+  // The base and supplement tables can have different local syllable IDs.
+  // Use their existing weights without looking up codes in a shared prism.
+  auto primary = rime::New<rime::Table>(
+      rime::path{"reverse_weight_evo_primary.table.bin"});
+  auto supplement = rime::New<rime::Table>(
+      rime::path{"reverse_weight_evo_supplement.table.bin"});
+  primary->Remove();
+  supplement->Remove();
+
+  rime::Code ji_code;
+  ji_code.push_back(0);
+  rime::Code primary_qi_code;
+  primary_qi_code.push_back(1);
+  rime::Syllabary primary_syllables{"ji", "qi"};
+  rime::Vocabulary primary_words;
+  primary_words[0].entries.emplace_back("骑", ji_code, 1.0);
+  // The weight of an unrelated homophone must not affect "骑".
+  primary_words[1].entries.emplace_back("其", primary_qi_code, 999.0);
+  ASSERT_TRUE(primary->Build(primary_syllables, primary_words, 2));
+  ASSERT_TRUE(primary->Save());
+  ASSERT_TRUE(primary->Load());
+
+  rime::Code supplement_qi_code;
+  supplement_qi_code.push_back(0);
+  rime::Syllabary supplement_syllables{"qi", "xi"};
+  rime::Vocabulary supplement_words;
+  supplement_words[0].entries.emplace_back("骑", supplement_qi_code, 100.0);
+  supplement_words[0].entries.emplace_back("其", supplement_qi_code, 200.0);
+  ASSERT_TRUE(supplement->Build(supplement_syllables, supplement_words, 2));
+  ASSERT_TRUE(supplement->Save());
+  ASSERT_TRUE(supplement->Load());
+
+  const rime::vector<rime::string> packs{"supplement"};
+  const rime::vector<rime::of<rime::Table>> tables{primary, supplement};
+  rime::Dictionary dictionary("reverse_lookup_weight_test", packs, tables,
+                              nullptr);
+  rime::string codes = "ji qi";
+  rime::SortReverseLookupCodesByWeight("骑", &codes, &dictionary);
+  EXPECT_EQ("qi ji", codes);
+
+  codes = "ji xi qi";
+  rime::SortReverseLookupCodesByWeight("骑", &codes, &dictionary);
+  EXPECT_EQ("qi ji xi", codes);
+
+  codes = "ji qi";
+  rime::SortReverseLookupCodesByWeight("不存在", &codes, &dictionary);
+  EXPECT_EQ("ji qi", codes);
+
+  supplement->Close();
+  primary->Close();
+  supplement->Remove();
+  primary->Remove();
 }
 #endif
 
