@@ -25,6 +25,8 @@ jobs:
   release:
     needs: [macos, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout last commit
         uses: actions/checkout@v7
