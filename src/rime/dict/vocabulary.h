@@ -59,19 +59,17 @@ struct DictEntry {
   // versioned reset); positive: explicitly pinned. Not a weight bonus.
   int manual_position = 0;
   uint64_t manual_version = 0;  // v, for deterministic equal-slot tie
-  int remaining_code_length = 0;
-  int matching_code_size = 0;
+  unsigned int remaining_code_length = 0;
+  unsigned int matching_code_size = 0;
   bool abbreviated_auxiliary = false;
 
   DictEntry() = default;
   ShortDictEntry ToShort() const { return {text, code, weight}; }
   bool IsExactMatch() const {
-    return matching_code_size == 0 ||
-           static_cast<size_t>(matching_code_size) == code.size();
+    return matching_code_size == 0 || matching_code_size == code.size();
   }
   bool IsPredictiveMatch() const {
-    return matching_code_size != 0 &&
-           static_cast<size_t>(matching_code_size) < code.size();
+    return matching_code_size != 0 && matching_code_size < code.size();
   }
   bool operator<(const DictEntry& other) const;
 };

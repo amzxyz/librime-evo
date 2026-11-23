@@ -342,7 +342,7 @@ void DictEntryIterator::ApplyAuxiliaryOrdering() {
   ordered.reserve(entries.size());
   for (size_t begin = 0; begin < entries.size();) {
     const bool exact = entries[begin]->IsExactMatch();
-    const int remaining = entries[begin]->remaining_code_length;
+    const auto remaining = entries[begin]->remaining_code_length;
     size_t end = begin + 1;
     while (end < entries.size() && entries[end]->IsExactMatch() == exact &&
            entries[end]->remaining_code_length == remaining) {
