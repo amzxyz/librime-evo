@@ -440,8 +440,13 @@ void LogMessageToSink(LogSeverity severity,
       std::fprintf(stderr, "Rime: logging failed.\n");
     }
   } else {
-    std::fprintf(stderr, "%c %s:%d] %s\n", LevelChar(severity), source_file,
-                 line, message.c_str());
+    const char* filename = source_file;
+    for (const char* p = source_file; *p; ++p) {
+      if (*p == '/' || *p == '\\')
+        filename = p + 1;
+    }
+    std::fprintf(stderr, "%c %s:%d] %s\n", LevelChar(severity), filename, line,
+                 message.c_str());
     std::fflush(stderr);
   }
 
