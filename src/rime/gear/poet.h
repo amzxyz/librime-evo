@@ -50,7 +50,7 @@ class Poet {
                                      const string& input,
                                      size_t start,
                                      TranslatorT* translator) {
-    if (!translator->contextual_suggestions() || !grammar_) {
+    if (!translator->contextual_suggestions() || !contextual_grammar_) {
       return translation;
     }
     auto preceding_text = translator->GetPrecedingText(start);
@@ -58,7 +58,7 @@ class Poet {
       return translation;
     }
     return New<ContextualTranslation>(translation, input, preceding_text,
-                                      grammar_.get());
+                                      contextual_grammar_.get());
   }
 
  private:
@@ -69,6 +69,7 @@ class Poet {
 
   const Language* language_;
   the<Grammar> grammar_;
+  the<Grammar> contextual_grammar_;
   Compare compare_;
 };
 

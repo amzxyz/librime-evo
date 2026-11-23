@@ -10,6 +10,15 @@ class Config;
 
 class Grammar : public Class<Grammar, Config*> {
  public:
+  class Component : public Class<Grammar, Config*>::Component {
+   public:
+    virtual Grammar* CreateContextual(Config* config) = 0;
+  };
+
+  static Component* Require(const string& name) {
+    return dynamic_cast<Component*>(Registry::instance().Find(name));
+  }
+
   virtual ~Grammar() {}
   virtual double Query(const string& context,
                        const string& word,

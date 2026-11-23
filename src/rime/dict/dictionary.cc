@@ -89,7 +89,8 @@ struct Chunk {
 struct QueryResult {
   vector<Chunk> chunks;
   bool is_heap = false;
-  bool sort_on_peek = false;  // Only predictive LookupWords() needs initial rank.
+  // Only predictive LookupWords() needs initial rank.
+  bool sort_on_peek = false;
   size_t next_order = 0;
 };
 

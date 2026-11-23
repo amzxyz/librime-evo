@@ -71,9 +71,10 @@ struct Line {
 
 const Line Line::kEmpty{nullptr, nullptr, 0, 0.0, 0};
 
-inline static Grammar* create_grammar(Config* config) {
+inline static Grammar* create_grammar(Config* config, bool contextual = false) {
   if (auto* grammar = Grammar::Require("grammar")) {
-    return grammar->Create(config);
+    return contextual ? grammar->CreateContextual(config)
+                      : grammar->Create(config);
   }
   return nullptr;
 }
@@ -81,6 +82,7 @@ inline static Grammar* create_grammar(Config* config) {
 Poet::Poet(const Language* language, Config* config, Compare compare)
     : language_(language),
       grammar_(create_grammar(config)),
+      contextual_grammar_(create_grammar(config, true)),
       compare_(compare) {}
 
 Poet::~Poet() {}
@@ -189,6 +191,11 @@ template <class Strategy>
 an<Sentence> Poet::MakeSentenceWithStrategy(const WordGraph& graph,
                                             size_t total_length,
                                             const string& preceding_text) {
+  const string empty_context;
+  Grammar* boundary_grammar =
+      preceding_text.empty() ? nullptr : contextual_grammar_.get();
+  const string& initial_context =
+      boundary_grammar ? preceding_text : empty_context;
   map<int, typename Strategy::State> states;
   Strategy::Initiate(states[0]);
   for (const auto& sv : graph) {
@@ -198,7 +205,8 @@ an<Sentence> Poet::MakeSentenceWithStrategy(const WordGraph& graph,
     DLOG(INFO) << "start pos: " << start_pos;
     const auto& source_state = states[start_pos];
     const auto update = [this, &states, &sv, start_pos, total_length,
-                         &preceding_text](const Line& candidate) {
+                         &initial_context,
+                         boundary_grammar](const Line& candidate) {
       for (const auto& ev : sv.second) {
         size_t end_pos = ev.first;
         if (start_pos == 0 && end_pos == total_length)
@@ -210,10 +218,13 @@ an<Sentence> Poet::MakeSentenceWithStrategy(const WordGraph& graph,
         const DictEntryList& entries = ev.second;
         for (const auto& entry : entries) {
           const string& context =
-              candidate.empty() ? preceding_text : candidate.context();
+              candidate.empty() ? initial_context : candidate.context();
+          Grammar* scorer = candidate.empty() && boundary_grammar
+                                ? boundary_grammar
+                                : grammar_.get();
           double weight = candidate.weight +
                           Grammar::Evaluate(context, entry->text, entry->weight,
-                                            is_rear, grammar_.get());
+                                            is_rear, scorer);
           Line new_line{&candidate, entry.get(), end_pos, weight};
           Line& best = Strategy::BestLineToUpdate(target_state, new_line);
           if (best.empty() || compare_(best, new_line)) {
@@ -257,6 +268,11 @@ deque<an<Sentence>> Poet::MakeSentences(const WordGraph& graph,
                                         const string& preceding_text,
                                         size_t max_sentences,
                                         double cutoff_threshold) {
+  const string empty_context;
+  Grammar* boundary_grammar =
+      preceding_text.empty() ? nullptr : contextual_grammar_.get();
+  const string& initial_context =
+      boundary_grammar ? preceding_text : empty_context;
   size_t beam_width =
       max_sentences * 3;  // allow more possibilities during search
   using State = std::list<Line>;
@@ -279,10 +295,13 @@ deque<an<Sentence>> Poet::MakeSentences(const WordGraph& graph,
       for (const auto& source_line : source_state) {
         for (const auto& entry : entries) {
           const string& context =
-              source_line.empty() ? preceding_text : source_line.context();
+              source_line.empty() ? initial_context : source_line.context();
+          Grammar* scorer = source_line.empty() && boundary_grammar
+                                ? boundary_grammar
+                                : grammar_.get();
           double weight = source_line.weight +
                           Grammar::Evaluate(context, entry->text, entry->weight,
-                                            is_rear, grammar_.get());
+                                            is_rear, scorer);
           size_t new_hash = source_line.text_hash;
           for (char c : entry->text) {
             new_hash = new_hash * 31 + c;

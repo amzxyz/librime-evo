@@ -131,7 +131,7 @@ Plugins
   - [librime-legacy](https://github.com/rime/librime-legacy) (Deprecated) Legacy module with
     GPL-licensed code
   - [librime-evo-lua](https://github.com/amzxyz/librime-evo-lua) Lua scripting
-  - [librime-octagram](https://github.com/lotem/librime-octagram) Language model
+  - [Evo Octagram v2](https://github.com/amzxyz/librime-evo-octagram) — optional language model plugin for `.dlm` (Dictionary Language Model) files
   - [librime-predict](https://github.com/rime/librime-predict) Predict next word
   - [librime-proto](https://github.com/lotem/librime-proto) IPC using CapnProto
 
