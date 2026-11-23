@@ -23,6 +23,7 @@ jobs:
       rime_plugins: amzxyz/librime-evo-octagram rime/librime-predict
 
   release:
+    if: ${{ github.ref_type == 'tag' || (github.repository == 'amzxyz/librime-evo' && github.ref == 'refs/heads/main') }}
     needs: [macos, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -45,14 +46,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Remove previous nightly release
-        if: ${{ github.ref_type != 'tag' }}
-        continue-on-error: true
-        run: |
-          gh release delete --yes --cleanup-tag latest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       # Checkout action will delete the working folder, download the artifacts after the checkout
       - name: Download artifacts
         uses: actions/download-artifact@v8
@@ -60,8 +53,16 @@ jobs:
           path: artifact
           merge-multiple: true
 
+      - name: Remove previous nightly release
+        if: ${{ github.ref_type == 'branch' }}
+        continue-on-error: true
+        run: |
+          gh release delete --yes --cleanup-tag latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Nightly release
-        if: ${{ github.repository == 'amzxyz/librime-evo' && github.ref == 'refs/heads/main' }}
+        if: ${{ github.ref_type == 'branch' }}
         uses: softprops/action-gh-release@v3
         with:
           name: "Nightly Build"
