@@ -40,7 +40,6 @@ RIME_DLL RIME_MODULE_LIST(kDefaultModules,
 #undef _RIME_MODULE_STR
 #undef _RIME_SEQ_FOR_EACH
 RIME_DLL RIME_MODULE_LIST(kDeployerModules, "deployer");
-RIME_MODULE_LIST(kLegacyModules, "legacy");
 
 RIME_REGISTER_MODULE_GROUP(default, "core", "dict", "gears")
 RIME_REGISTER_MODULE_GROUP(deployer, "core", "dict", "levers")

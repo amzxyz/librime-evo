@@ -623,12 +623,6 @@ bool SymlinkingPrebuiltDictionaries::Run(Deployer* deployer) {
   return success;
 }
 
-bool UserDictUpgrade::Run(Deployer*) {
-  // EVO defines a single fresh UserDB format. The historical deployment task
-  // name remains registered, but no legacy DB conversion is performed.
-  return true;
-}
-
 bool UserDictSync::Run(Deployer* deployer) {
   UserDictManager mgr(deployer);
   return mgr.SynchronizeAll();
@@ -747,10 +741,7 @@ bool CleanupTrash::Run(Deployer* deployer) {
     if (!fs::is_regular_file(entry))
       continue;
     auto file_name = entry.filename().to_utf8_string();
-    if (file_name == "rime.log" || boost::ends_with(file_name, ".bin") ||
-        boost::ends_with(file_name, ".reverse.kct") ||
-        boost::ends_with(file_name, ".userdb.kct.old") ||
-        boost::ends_with(file_name, ".userdb.kct.snapshot")) {
+    if (file_name == "rime.log" || boost::ends_with(file_name, ".bin")) {
       if (!success && !MaybeCreateDirectory(trash)) {
         return false;
       }

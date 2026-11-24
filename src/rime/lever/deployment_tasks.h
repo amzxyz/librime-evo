@@ -83,13 +83,6 @@ class SymlinkingPrebuiltDictionaries : public DeploymentTask {
   bool Run(Deployer* deployer);
 };
 
-// upgrade user dictionaries
-class UserDictUpgrade : public DeploymentTask {
- public:
-  UserDictUpgrade(TaskInitializer = TaskInitializer()) {}
-  bool Run(Deployer* deployer);
-};
-
 class UserDictSync : public DeploymentTask {
  public:
   UserDictSync(TaskInitializer = TaskInitializer()) {}

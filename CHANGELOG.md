@@ -472,8 +472,6 @@ Follow these rules to apply correct conversion between `string` and `rime::path`
 
 ### Features
 
-* **api:** implement capnproto api ([873f648](https://github.com/rime/librime/commit/873f648))
-* **api:** include candidate labels in proto message ([aae7a0c](https://github.com/rime/librime/commit/aae7a0c))
 * **charset_filter:** support charset options with emoji ([#293](https://github.com/rime/librime/issues/293)) ([943c95b](https://github.com/rime/librime/commit/943c95b))
 * **charset_filter:** support CJK Unified Ideographs Extension G ([#393](https://github.com/rime/librime/issues/393)) ([0a1573d](https://github.com/rime/librime/commit/0a1573d))
 * **chord_composer:** support chording with Shift keys ([94cf479](https://github.com/rime/librime/commit/94cf479))
@@ -484,7 +482,6 @@ Follow these rules to apply correct conversion between `string` and `rime::path`
 * **selector:** support 4 combinations of horizontal/vertical text orientation and stacked/linear candidate list layout ([c498f71](https://github.com/rime/librime/commit/c498f71))
 * **selector:** support vertical UI ([dbb35c6](https://github.com/rime/librime/commit/dbb35c6))
 * **switcher:** enable schema in cases where conditions are met ([217c72b](https://github.com/rime/librime/commit/217c72b))
-* **tools/rime_proto_console:** demo for proto api ([d88ef9f](https://github.com/rime/librime/commit/d88ef9f))
 
 
 ### Performance Improvements
@@ -726,14 +723,11 @@ known to be in use by osfans/trime.
 
 * **rime_api.h:** add `RIME_MODULE_LIST`, `RIME_REGISTER_MODULE_GROUP`.
 * **Makefile:** add make targets `thirdparty/*` to build individual libraries.
-* **legacy/src/legacy_module.cc:** plugin module `rime-legacy` for GPL code,
-  providing component `legacy_userdb` for user dictionary upgrade.
 * **src/setup.cc:** define module groups `"default"` and `"deployer"`, to avoid
 	naming a list of built-bin modules in `RimeTraits::modules`.
 * **test/table_test.cc:** fix random segment faults when run shuffled.
-* **thirdparty/src/leveldb:** new dependency LevelDB, replacing Kyoto Cabinet.
-* **dict/level_db:** userdb implementation based on LevelDB, replacing treeDb.
-* **dict/tree_db:** moved to `legacy/src/`.
+* **thirdparty/src/leveldb:** new dependency LevelDB.
+* **dict/level_db:** userdb implementation based on LevelDB.
 * **dict/user_db:** refactored and modularized to ease adding implementations.
 * **gear/cjk_minifier:** support CJK Extension E.
 * **gear/memory:** save cached phrases as soon as the next composition begins.
@@ -742,7 +736,6 @@ known to be in use by osfans/trime.
 * **gear/single_char_filter:** bring single character candidates to the front.
 * **gear/simplifier:** adapt to OpenCC 1.0 API.
 * **thirdparty/src/opencc:** update OpenCC to v1.0.2 (incompatible with v0.4).
-* **lever/deployment_tasks:** update and rename task `user_dict_upgrade`.
 
 
 

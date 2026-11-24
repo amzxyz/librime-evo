@@ -13,7 +13,6 @@ namespace rime {
 
 RIME_DLL extern const char* kDefaultModules[];
 RIME_DLL extern const char* kDeployerModules[];
-extern const char* kLegacyModules[];
 
 RIME_DLL void LoadModules(const char* module_names[]);
 

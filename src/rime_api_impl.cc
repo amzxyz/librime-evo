@@ -82,7 +82,6 @@ RIME_DEPRECATED Bool RimeStartMaintenance(Bool full_check) {
     LOG(INFO) << "changes detected; starting maintenance.";
   }
   deployer.ScheduleTask("workspace_update");
-  deployer.ScheduleTask("user_dict_upgrade");
   deployer.ScheduleTask("cleanup_trash");
   deployer.StartMaintenance();
   return True;
@@ -119,7 +118,6 @@ RIME_DEPRECATED Bool RimeDeployWorkspace() {
   Deployer& deployer(Service::instance().deployer());
   return Bool(deployer.RunTask("installation_update") &&
               deployer.RunTask("workspace_update") &&
-              deployer.RunTask("user_dict_upgrade") &&
               deployer.RunTask("cleanup_trash"));
 }
 
@@ -1262,9 +1260,6 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.candidate_list_from_index = &RimeCandidateListFromIndex;
     s_api.get_prebuilt_data_dir = &RimeGetPrebuiltDataDir;
     s_api.get_staging_dir = &RimeGetStagingDir;
-    s_api.commit_proto = nullptr;
-    s_api.context_proto = nullptr;
-    s_api.status_proto = nullptr;
     s_api.get_state_label = &RimeGetStateLabel;
     s_api.delete_candidate = &RimeDeleteCandidate;
     s_api.delete_candidate_on_current_page = &RimeDeleteCandidateOnCurrentPage;

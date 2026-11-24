@@ -80,9 +80,6 @@ typedef uintptr_t RimeSessionId;
 #define RIME_PROVIDED(p, member) \
   ((p) && RIME_STRUCT_HAS_MEMBER(*(p), (p)->member) && (p)->member)
 
-//! For passing pointer to capnproto builder as opaque pointer through C API.
-#define RIME_PROTO_BUILDER void
-
 //! Rime traits structure
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var)
@@ -480,14 +477,8 @@ typedef struct RIME_FLAVORED(rime_api_t) {
   //! \deprecated use get_staging_dir_s instead.
   const char* (*get_staging_dir)(void);
 
-  //! \deprecated for capnproto API, use "proto" module from librime-proto
-  //! plugin.
-  void (*commit_proto)(RimeSessionId session_id,
-                       RIME_PROTO_BUILDER* commit_builder);
-  void (*context_proto)(RimeSessionId session_id,
-                        RIME_PROTO_BUILDER* context_builder);
-  void (*status_proto)(RimeSessionId session_id,
-                       RIME_PROTO_BUILDER* status_builder);
+  //! Reserved ABI slots.
+  void (*reserved[3])(RimeSessionId, void*);
 
   const char* (*get_state_label)(RimeSessionId session_id,
                                  const char* option_name,

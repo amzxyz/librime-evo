@@ -128,12 +128,9 @@ Plugins
 ===
   - [librime-charcode](https://github.com/rime/librime-charcode) (Deprecated) Module that
     deals with character encoding; depends on boost::locale and ICU libraries
-  - [librime-legacy](https://github.com/rime/librime-legacy) (Deprecated) Legacy module with
-    GPL-licensed code
   - [librime-evo-lua](https://github.com/amzxyz/librime-evo-lua) Lua scripting
   - [Evo Octagram v2](https://github.com/amzxyz/librime-evo-octagram) — optional language model plugin for `.dlm` (Dictionary Language Model) files
   - [librime-predict](https://github.com/rime/librime-predict) Predict next word
-  - [librime-proto](https://github.com/lotem/librime-proto) IPC using CapnProto
 
 Related works
 ===
