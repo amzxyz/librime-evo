@@ -7,8 +7,6 @@ deps/*
 !deps/spdlog/
 !deps/spdlog/**
 plugins/*/
-!plugins/lua/
-!plugins/lua/**
 !plugins/CMakeLists.txt
 !plugins/plugin.cc
 !plugins/plugins_module.cc

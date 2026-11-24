@@ -1,9 +1,5 @@
 set(RIME_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lua/CMakeLists.txt")
-  message(FATAL_ERROR "Initialize Lua with: git submodule update --init --recursive plugins/lua")
-endif()
-
 # work around CMake build issues on macOS
 set(rime_plugin_boilerplate_src "plugin.cc")
 
@@ -33,9 +29,6 @@ if(DEFINED ENV{RIME_PLUGINS})
     string(REGEX REPLACE "[^ ]*/(librime-)?" "" plugins ${plugins})
     string(REPLACE " " ";" plugins ${plugins})
   endif()
-  list(REMOVE_ITEM plugins evo-lua)
-  list(APPEND plugins lua)
-  list(REMOVE_DUPLICATES plugins)
 else()
   file(GLOB plugin_files "*")
   foreach(file ${plugin_files})

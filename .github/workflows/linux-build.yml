@@ -27,6 +27,7 @@ jobs:
       CXX: ${{ matrix.cxx_compiler }}
       BOOST_ROOT: ${{ github.workspace }}/deps/boost
       boost_libs: regex
+      RIME_PLUGINS: amzxyz/librime-evo-lua
     
     steps:
       - name: Checkout last commit
@@ -37,6 +38,9 @@ jobs:
 
       - name: Install dependency
         run: ./action-install-linux.sh
+
+      - name: Install Rime plugins
+        run: ./install-plugins.sh "$RIME_PLUGINS"
 
       - name: Build and test
         run: make test

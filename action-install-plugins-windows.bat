@@ -32,16 +32,6 @@ if %slug% == %plugin% (
 )
 set plugin_project=%slug:*/=%
 set plugin_dir=plugins\%plugin_project:librime-=%
-if "%slug%" == "amzxyz/librime-evo-lua" set plugin_dir=plugins\lua
-if "%plugin_dir%" == "plugins\lua" (
-  if exist plugins\lua\.git (
-    git -C plugins\lua submodule update --init --recursive
-  ) else (
-    git submodule update --init --recursive -- plugins/lua
-  )
-  if errorlevel 1 exit /b 1
-  exit /b 0
-)
 git clone %clone_options% "https://github.com/%slug%.git" %plugin_dir%
 if errorlevel 1 exit /b
 rem pull request ref doesn't work with git clone --branch
@@ -49,6 +39,8 @@ if not [%branch%] == [] (
    git -C %plugin_dir% checkout %branch%
    if errorlevel 1 exit /b
 )
+git -C "%plugin_dir%" submodule update --init --recursive
+if errorlevel 1 exit /b
 :action_install_plugin
 echo %plugin% >> version-info.txt
 git -C %plugin_dir% describe --always >> version-info.txt

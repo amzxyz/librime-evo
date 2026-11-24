@@ -13,6 +13,4 @@ jobs:
       with:
         submodules: recursive
     - name: Build with plugins
-      run: |
-        luajit_release=$(git -C plugins/lua/thirdparty/luajit log -1 --format=%ct)
-        docker build --build-arg LUAJIT_RELVER="$luajit_release" -t librime .
+      run: docker build -t librime .
