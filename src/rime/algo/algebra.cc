@@ -107,6 +107,10 @@ bool Projection::Apply(string* value) {
 }
 
 bool Projection::Apply(Script* value) {
+  return Apply(value, nullptr);
+}
+
+bool Projection::Apply(Script* value, set<string>* display_codes) {
   if (!value || value->empty())
     return false;
   bool modified = false;
@@ -130,6 +134,10 @@ bool Projection::Apply(Script* value) {
           temp.Merge(v.first, SpellingProperties(), v.second);
         }
         if (x->addition() && !s.str.empty()) {
+          // Record only the explicitly marked spelling, before further rules
+          // can derive other variants from it.
+          if (display_codes && s.properties.auxiliary_display)
+            display_codes->insert(s.str);
           temp.Merge(s.str, s.properties, v.second);
         }
       } else {

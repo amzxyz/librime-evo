@@ -33,6 +33,7 @@ class Projection {
   RIME_DLL bool Apply(string* value);
   // {z, y, x} -> {a, b, c, d}
   RIME_DLL bool Apply(Script* value);
+  bool Apply(Script* value, set<string>* display_codes);
 
  protected:
   vector<of<Calculation>> calculation_;

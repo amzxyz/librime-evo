@@ -28,6 +28,7 @@ struct SpellingProperties {
   string tips;
   bool is_correction = false;
   bool auxiliary = false;  // AUX hit; may carry a rule-specific penalty
+  bool auxiliary_display = false;
 
   // 疊加運算規則, 將運算規則產生的屬性應用到當前拼寫上
   void Compose(const SpellingProperties& delta);

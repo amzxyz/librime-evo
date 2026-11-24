@@ -208,6 +208,39 @@ TEST_F(RimeAuxiliaryLookupTest,
                            [](const auto& code) { return code.code == "rx"; }));
 }
 
+TEST_F(RimeAuxiliaryLookupTest, DisplayCodesAreExplicitAndGroupSpecific) {
+  Config schema;
+  ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
+  auto rules = schema.GetList("build/auxiliary/algebra/aux_path_test");
+  ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^rx$|rx|abbrev,display")));
+  ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^abcdef$|abcdef|display")));
+  ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^rx$|rzz|")));
+  ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
+  database_->Close();
+  ASSERT_TRUE(
+      DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
+
+  auto display = AuxiliaryDb::Open("aux_path_test");
+  ASSERT_TRUE(display);
+  string code;
+  ASSERT_TRUE(display->LookupDisplay("你", &code));
+  EXPECT_EQ("abcdef rx", code);
+  EXPECT_FALSE(display->LookupDisplay("拟", &code));
+  EXPECT_TRUE(code.empty());
+
+  vector<AuxiliaryCharacter> hits;
+  ASSERT_TRUE(display->Lookup("rx", &hits));
+  ASSERT_EQ(1u, hits.size());
+  EXPECT_EQ(kAbbreviation, hits[0].type);
+  ASSERT_TRUE(display->Lookup("rx/", &hits));
+  EXPECT_EQ(kNormalSpelling, hits[0].type);
+  ASSERT_TRUE(display->Lookup("rzz", &hits));
+
+  auto other = AuxiliaryDb::Open("aux_path_other");
+  ASSERT_TRUE(other);
+  EXPECT_FALSE(other->LookupDisplay("你", &code));
+}
+
 TEST_F(RimeAuxiliaryLookupTest, RebuildsOnlyTheChangedGroup) {
   const path direct_path{"aux_path_test.aux.bin"};
   const auto direct_time = std::filesystem::last_write_time(direct_path);

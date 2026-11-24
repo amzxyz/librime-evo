@@ -107,8 +107,8 @@ class Reorder : public Calculation {
   bool dedup_;
 };
 
-// aux/pattern/replacement/[abbrev]: keep the original spelling, add an AUX
-// hit, and optionally apply abbreviation ranking.
+// aux/pattern/replacement/[abbrev,display]: derive an AUX spelling.
+// Display marks the result for reverse lookup without altering its rank.
 class Auxiliary : public Derivation {
  public:
   static Factory Parse;
@@ -116,6 +116,7 @@ class Auxiliary : public Derivation {
 
  private:
   bool abbreviation_ = false;
+  bool display_ = false;
 };
 
 }  // namespace rime

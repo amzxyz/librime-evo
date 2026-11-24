@@ -5,6 +5,8 @@
 #include <cstring>
 #include <sstream>
 #include <rime/dict/auxiliary_db.h>
+#include <rime/resource.h>
+#include <rime/service.h>
 
 namespace rime {
 
@@ -13,6 +15,7 @@ namespace {
 const char kAuxiliaryFormat[] = "Rime::Auxiliary/1.0";
 const char kRecordSeparator = '\x1e';
 const char kFieldSeparator = '\x1f';
+const char kDisplayFlag = 'd';
 
 static string Encode(double value) {
   std::ostringstream out;
@@ -35,8 +38,13 @@ static string EncodeCharacterRecord(const AuxiliaryCharacter& value) {
 }
 
 static string EncodeCodeRecord(const AuxiliaryCode& value) {
-  return value.code + kFieldSeparator + std::to_string(value.type) +
-         kFieldSeparator + Encode(value.credibility);
+  string record = value.code + kFieldSeparator + std::to_string(value.type) +
+                  kFieldSeparator + Encode(value.credibility);
+  if (value.display) {
+    record += kFieldSeparator;
+    record += kDisplayFlag;
+  }
+  return record;
 }
 
 static vector<string> SplitRecords(const string& value) {
@@ -89,6 +97,18 @@ struct AuxiliaryDb::Metadata {
 };
 
 AuxiliaryDb::AuxiliaryDb(const path& file_path) : MappedFile(file_path) {}
+
+the<AuxiliaryDb> AuxiliaryDb::Open(const string& group) {
+  if (group.empty())
+    return nullptr;
+  the<ResourceResolver> resolver(
+      Service::instance().CreateDeployedResourceResolver(
+          {"auxiliary_db", "", ".aux.bin"}));
+  auto db = std::make_unique<AuxiliaryDb>(resolver->ResolvePath(group));
+  if (!db->Load())
+    return nullptr;
+  return db;
+}
 
 bool AuxiliaryDb::Load() {
   if (IsOpen())
@@ -261,26 +281,47 @@ void AuxiliaryDb::CommonPrefixLookup(
   }
 }
 
-bool AuxiliaryDb::ReverseLookup(const string& text,
-                                vector<AuxiliaryCode>* result) const {
-  if (!result || !character_keys_ || !character_values_ || !metadata_)
-    return false;
-  result->clear();
+string AuxiliaryDb::GetCharacterValue(const string& text) const {
+  if (!IsOpen() || !character_keys_ || !character_values_ || !metadata_)
+    return {};
   const auto id = character_keys_->Lookup(text);
   if (id == kInvalidStringId)
+    return {};
+  return character_values_->GetString(metadata_->character_index[id]);
+}
+
+bool AuxiliaryDb::ReverseLookup(const string& text,
+                                vector<AuxiliaryCode>* result) const {
+  if (!result)
     return false;
-  const auto value_id = metadata_->character_index[id];
-  for (const auto& record :
-       SplitRecords(character_values_->GetString(value_id))) {
+  result->clear();
+  for (const auto& record : SplitRecords(GetCharacterValue(text))) {
     const auto fields = SplitFields(record);
-    if (fields.size() != 3)
+    const bool display = fields.size() == 4 && fields[3].size() == 1 &&
+                         fields[3][0] == kDisplayFlag;
+    if (fields.size() != 3 && !display)
       continue;
     double credibility = 0.0;
     if (!Decode(fields[2], &credibility))
       continue;
     result->push_back({fields[0],
                        static_cast<SpellingType>(std::stoi(fields[1])),
-                       credibility});
+                       credibility, display});
+  }
+  return !result->empty();
+}
+
+bool AuxiliaryDb::LookupDisplay(const string& text, string* result) const {
+  if (!result)
+    return false;
+  result->clear();
+  for (const auto& record : SplitRecords(GetCharacterValue(text))) {
+    if (record.size() < 2 || record[record.size() - 2] != kFieldSeparator ||
+        record.back() != kDisplayFlag)
+      continue;
+    if (!result->empty())
+      result->push_back(' ');
+    result->append(record, 0, record.find(kFieldSeparator));
   }
   return !result->empty();
 }

@@ -15,6 +15,7 @@ struct AuxiliaryCode {
   string code;
   SpellingType type = kNormalSpelling;
   double credibility = 0.0;
+  bool display = false;
 };
 
 struct AuxiliaryCharacter {
@@ -27,6 +28,8 @@ class AuxiliaryDb : public MappedFile {
  public:
   explicit AuxiliaryDb(const path& file_path);
 
+  RIME_DLL static the<AuxiliaryDb> Open(const string& group);
+
   bool Load();
   bool Build(const map<string, vector<AuxiliaryCode>>& by_character,
              const map<string, vector<AuxiliaryCharacter>>& by_code,
@@ -38,10 +41,14 @@ class AuxiliaryDb : public MappedFile {
       const string& input,
       vector<pair<size_t, vector<AuxiliaryCharacter>>>* result) const;
   bool ReverseLookup(const string& text, vector<AuxiliaryCode>* result) const;
+  // Return the space-separated spellings marked for display.
+  RIME_DLL bool LookupDisplay(const string& text, string* result) const;
   uint32_t checksum() const;
 
  private:
   struct Metadata;
+
+  string GetCharacterValue(const string& text) const;
 
   Metadata* metadata_ = nullptr;
   the<StringTable> character_keys_;

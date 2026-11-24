@@ -380,8 +380,19 @@ Calculation* Auxiliary::Parse(const vector<string>& args) {
   the<Auxiliary> x(new Auxiliary);
   x->pattern_.assign(args[1]);
   x->replacement_.assign(args[2]);
-  if (args.size() > 3 && args[3] == "abbrev")
-    x->abbreviation_ = true;
+  if (args.size() > 3 && !args[3].empty()) {
+    vector<string> flags;
+    boost::split(flags, args[3], boost::is_any_of(","));
+    for (auto& flag : flags) {
+      boost::trim(flag);
+      if (flag == "abbrev")
+        x->abbreviation_ = true;
+      else if (flag == "display")
+        x->display_ = true;
+      else
+        return nullptr;
+    }
+  }
   return x.release();
 }
 
@@ -395,6 +406,7 @@ bool Auxiliary::Apply(Spelling* spelling) {
   // declaration, so apply the replacement directly after confirming a match.
   spelling->str = boost::regex_replace(spelling->str, pattern_, replacement_);
   spelling->properties.auxiliary = true;
+  spelling->properties.auxiliary_display = display_;
   if (abbreviation_) {
     spelling->properties.type = kAbbreviation;
     spelling->properties.credibility += kAbbreviationPenalty;

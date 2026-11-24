@@ -21,8 +21,6 @@
 #include <rime/language.h>
 #include <rime/schema.h>
 #include <rime/translation.h>
-#include <rime/resource.h>
-#include <rime/service.h>
 #include <rime/algo/syllabifier.h>
 #include <utf8.h>
 #include <rime/dict/corrector.h>
@@ -329,14 +327,9 @@ bool ScriptTranslator::LoadAuxiliaryMatcher() {
   if (auxiliary_type_.empty())
     return false;
   if (!auxiliary_db_) {
-    the<ResourceResolver> resolver(
-        Service::instance().CreateDeployedResourceResolver(
-            {"auxiliary_db", "", ".aux.bin"}));
-    auto database =
-        std::make_unique<AuxiliaryDb>(resolver->ResolvePath(auxiliary_type_));
-    if (!database->Load())
+    auxiliary_db_ = AuxiliaryDb::Open(auxiliary_type_);
+    if (!auxiliary_db_)
       return false;
-    auxiliary_db_ = std::move(database);
   }
   auxiliary_matcher_ =
       std::make_shared<AuxiliaryMatcher>(dict_.get(), auxiliary_db_.get());

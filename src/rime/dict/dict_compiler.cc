@@ -615,38 +615,36 @@ static bool BuildAuxiliaryDatabase(const ReverseLookupTable& sources,
   Projection projection;
   if (!projection.Load(aux_algebra))
     return false;
-  map<pair<string, string>, SpellingProperties> entries;
-  for (const auto& item : sources) {
-    for (const auto& raw_code : item.second) {
+  map<string, vector<AuxiliaryCode>> by_character;
+  map<string, vector<AuxiliaryCharacter>> by_code;
+  for (const auto& [character, raw_codes] : sources) {
+    map<string, SpellingProperties> entries;
+    set<string> display_codes;
+    for (const auto& raw_code : raw_codes) {
       Script projected;
       projected.AddSyllable(raw_code);
-      projection.Apply(&projected);
+      projection.Apply(&projected, &display_codes);
       for (const auto& spelling : projected) {
         if (!IsAsciiPrismKey(spelling.first))
           continue;
         for (const auto& variant : spelling.second) {
-          if (variant.properties.auxiliary) {
-            auto key = std::make_pair(item.first, spelling.first);
-            auto it = entries.find(key);
-            if (it == entries.end() ||
-                variant.properties.type < it->second.type ||
-                (variant.properties.type == it->second.type &&
-                 variant.properties.credibility > it->second.credibility)) {
-              entries[key] = variant.properties;
-            }
-          }
+          const auto& props = variant.properties;
+          if (!props.auxiliary)
+            continue;
+          auto [it, inserted] = entries.try_emplace(spelling.first, props);
+          auto& best = it->second;
+          if (!inserted && (props.type < best.type ||
+                            (props.type == best.type &&
+                             props.credibility > best.credibility)))
+            best = props;
         }
       }
     }
-  }
-  map<string, vector<AuxiliaryCode>> by_character;
-  map<string, vector<AuxiliaryCharacter>> by_code;
-  for (const auto& item : entries) {
-    const auto& props = item.second;
-    by_character[item.first.first].push_back(
-        {item.first.second, props.type, props.credibility});
-    by_code[item.first.second].push_back(
-        {item.first.first, props.type, props.credibility});
+    for (const auto& [code, props] : entries) {
+      by_character[character].push_back({code, props.type, props.credibility,
+                                         display_codes.count(code) != 0});
+      by_code[code].push_back({character, props.type, props.credibility});
+    }
   }
   AuxiliaryDb database(target);
   database.Remove();
