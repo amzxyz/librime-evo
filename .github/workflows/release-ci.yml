@@ -15,12 +15,12 @@ jobs:
   macos:
     uses: ./.github/workflows/macos-build.yml
     with:
-      rime_plugins: amzxyz/librime-evo-octagram rime/librime-predict
+      rime_plugins: amzxyz/librime-evo-lua amzxyz/librime-evo-octagram rime/librime-predict
 
   windows:
     uses: ./.github/workflows/windows-build.yml
     with:
-      rime_plugins: amzxyz/librime-evo-octagram rime/librime-predict
+      rime_plugins: amzxyz/librime-evo-lua amzxyz/librime-evo-octagram rime/librime-predict
 
   release:
     if: ${{ github.ref_type == 'tag' || (github.repository == 'amzxyz/librime-evo' && github.ref == 'refs/heads/main') }}

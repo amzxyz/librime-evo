@@ -20,11 +20,8 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
 WORKDIR /librime
 COPY . .
 
-# Git metadata is excluded from the image; pass the release label separately.
-ARG LUAJIT_RELVER=ROLLING
-RUN printf '%s\n' "$LUAJIT_RELVER" > plugins/lua/thirdparty/luajit/.relver
-
 RUN bash install-plugins.sh \
+  amzxyz/librime-evo-lua \
   rime/librime-charcode \
   amzxyz/librime-evo-octagram \
   rime/librime-predict
