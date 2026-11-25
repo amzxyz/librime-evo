@@ -42,6 +42,28 @@ namespace rime {
 
 namespace {
 
+using AuxiliarySwitch = std::variant<bool, string>;
+
+AuxiliarySwitch ReadAuxiliarySwitch(Config* config, const string& key) {
+  bool enabled = false;
+  if (config->GetBool(key, &enabled))
+    return enabled;
+  if (auto map = config->GetMap(key)) {
+    if (auto option = map->GetValue("option")) {
+      if (!option->empty())
+        return option->str();
+    }
+  }
+  return false;
+}
+
+bool AuxiliarySwitchEnabled(const AuxiliarySwitch& setting,
+                            const Context* context) {
+  if (const auto* enabled = std::get_if<bool>(&setting))
+    return *enabled;
+  return context->get_option(std::get<string>(setting));
+}
+
 struct SyllabifyTask {
   const Code& code;
   const SyllableGraph& graph;
@@ -264,7 +286,7 @@ class ScriptTranslation : public Translation {
                     size_t end_of_input,
                     int max_sentences,
                     double sentence_cutoff_threshold,
-                    bool use_direct_aux,
+                    bool use_direct_char_aux,
                     string auxiliary_suffix,
                     an<const DirectWordAuxiliary> word_auxiliary = nullptr)
       : translator_(translator),
@@ -276,7 +298,7 @@ class ScriptTranslation : public Translation {
             corrector,
             input,
             start,
-            use_direct_aux ? translator->auxiliary_matcher() : nullptr,
+            use_direct_char_aux ? translator->auxiliary_matcher() : nullptr,
             word_auxiliary ? word_auxiliary->code.size() : 0)),
         max_sentences_(max_sentences),
         sentence_cutoff_threshold_(sentence_cutoff_threshold),
@@ -370,10 +392,10 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
       }
     }
     config->GetString(name_space_ + "/aux", &auxiliary_type_);
-    config->GetBool(name_space_ + "/enable_direct_aux", &enable_direct_aux_);
-    config->GetString(name_space_ + "/direct_aux_option", &direct_aux_option_);
-    config->GetString(name_space_ + "/direct_word_aux_option",
-                      &direct_word_aux_option_);
+    enable_direct_char_aux_ =
+        ReadAuxiliarySwitch(config, name_space_ + "/enable_direct_char_aux");
+    enable_direct_word_aux_ =
+        ReadAuxiliarySwitch(config, name_space_ + "/enable_direct_word_aux");
   }
   if (enable_correction_) {
     if (auto* corrector = Corrector::Require("corrector")) {
@@ -411,8 +433,9 @@ an<Translation> ScriptTranslator::Query(const string& input,
     if (!auxiliary_suffix.empty() && !LoadAuxiliaryMatcher())
       return nullptr;
   }
-  const bool use_direct_aux =
-      DirectAuxiliaryEnabled() && LoadAuxiliaryMatcher();
+  const bool use_direct_char_aux =
+      AuxiliarySwitchEnabled(enable_direct_char_aux_, context) &&
+      LoadAuxiliaryMatcher();
 
   bool user_dict_available =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
@@ -421,7 +444,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
   // the translator should survive translations it creates
   auto result = New<ScriptTranslation>(
       this, corrector_.get(), poet_.get(), input, segment.start, end_of_input,
-      max_sentences_, sentence_cutoff_threshold_, use_direct_aux,
+      max_sentences_, sentence_cutoff_threshold_, use_direct_char_aux,
       std::move(auxiliary_suffix));
   an<Translation> ordinary;
   if (result->Evaluate(dict_.get(),
@@ -431,8 +454,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
       ordinary =
           poet_->ContextualWeighted(ordinary, input, segment.start, this);
   }
-  if (suffix || direct_word_aux_option_.empty() ||
-      !context->get_option(direct_word_aux_option_) ||
+  if (suffix || !AuxiliarySwitchEnabled(enable_direct_word_aux_, context) ||
       !LoadAuxiliaryMatcher()) {
     return ordinary;
   }
@@ -487,12 +509,6 @@ bool ScriptTranslator::SelectPrism() {
   if (changed)
     auxiliary_matcher_.reset();
   return true;
-}
-
-bool ScriptTranslator::DirectAuxiliaryEnabled() const {
-  return enable_direct_aux_ && !auxiliary_type_.empty() &&
-         (direct_aux_option_.empty() ||
-          engine_->context()->get_option(direct_aux_option_));
 }
 
 bool ScriptTranslator::LoadAuxiliaryMatcher() {

@@ -618,7 +618,7 @@ speller:
 translator:
   dictionary: aux_path_test
   aux: aux_path_test
-  enable_direct_aux: true
+  enable_direct_char_aux: true
   user_dict_mode: off
   enable_completion: false
 )YAML");
@@ -686,7 +686,7 @@ translator:
   dictionary: aux_path_test
   prism: pinyin
   aux: aux_path_test
-  enable_direct_aux: true
+  enable_direct_char_aux: true
   user_dict_mode: auto
   enable_completion: false
 )YAML");
@@ -707,7 +707,7 @@ translator:
 }
 
 TEST_F(RimeAuxiliaryLookupTest, EngineControlsDirectAndSuffixIndependently) {
-  for (bool direct : {false, true}) {
+  for (const string direct : {"", "false", "true", "direct", "option"}) {
     for (bool suffix : {false, true}) {
       SCOPED_TRACE(::testing::Message()
                    << "direct=" << direct << " suffix=" << suffix);
@@ -732,7 +732,6 @@ translator:
   prism: zrm
   user_dict_mode: off
   aux: aux_path_test
-  direct_aux_option: direct
   enable_completion: false
 plain:
   dictionary: aux_path_test
@@ -746,8 +745,12 @@ plain:
            {"engine", "speller", "auxiliary_suffix_segmentor", "translator",
             "plain"})
         ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
-      if (direct) {
-        ASSERT_TRUE(config->SetBool("translator/enable_direct_aux", true));
+      if (direct == "option") {
+        const string key = "translator/enable_direct_char_aux/option";
+        ASSERT_TRUE(config->SetString(key, "direct"));
+      } else if (!direct.empty()) {
+        ASSERT_TRUE(
+            config->SetString("translator/enable_direct_char_aux", direct));
       }
       the<Engine> engine(Engine::Create());
       engine->ApplySchema(new Schema("aux_controls_test", config.release()));
@@ -774,14 +777,14 @@ plain:
       context->set_option("suffix", suffix);
       const auto direct_hit = std::make_pair(string("逆"), size_t{3});
       const auto direct_candidates = query("niz");
-      EXPECT_EQ(direct,
+      EXPECT_EQ(direct == "true" || direct == "option",
                 std::find(direct_candidates.begin(), direct_candidates.end(),
                           direct_hit) != direct_candidates.end());
       context->set_option("direct", false);
       const auto without_direct = query("niz");
-      EXPECT_EQ(
-          without_direct.end(),
-          std::find(without_direct.begin(), without_direct.end(), direct_hit));
+      EXPECT_EQ(direct == "true",
+                std::find(without_direct.begin(), without_direct.end(),
+                          direct_hit) != without_direct.end());
 
       const auto suffix_candidates = query("ni::z");
       ASSERT_FALSE(context->composition().empty());
@@ -857,9 +860,8 @@ translator:
   user_dict: aux_path_word
   user_dict_mode: auto
   aux: aux_path_test
-  enable_direct_aux: true
-  direct_aux_option: syllable_aux
-  direct_word_aux_option: direct_word_aux
+  enable_direct_char_aux: {option: syllable_aux}
+  enable_direct_word_aux: {option: direct_word_aux}
 )YAML");
   Config input;
   ASSERT_TRUE(input.LoadFromStream(settings));
@@ -969,10 +971,12 @@ TEST_F(RimeAuxiliaryLookupTest, WordAuxiliaryRespectsCompleteTailSpelling) {
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_file));
 
   for (const string type : {"pinyin", "zrm"}) {
-    SCOPED_TRACE(type);
-    auto config = std::make_unique<Config>();
-    ASSERT_TRUE(config->LoadFromFile(schema_file));
-    std::istringstream settings(R"YAML(engine:
+    for (const string setting :
+         {"", "false", "true", "direct_word_aux", "option"}) {
+      SCOPED_TRACE(::testing::Message() << type << " setting=" << setting);
+      auto config = std::make_unique<Config>();
+      ASSERT_TRUE(config->LoadFromFile(schema_file));
+      std::istringstream settings(R"YAML(engine:
   segmentors: [abc_segmentor, fallback_segmentor]
   translators: [script_translator]
 speller:
@@ -981,68 +985,78 @@ translator:
   dictionary: aux_path_test
   user_dict_mode: off
   aux: aux_path_test
-  direct_word_aux_option: direct_word_aux
   enable_completion: false
 )YAML");
-    Config input;
-    ASSERT_TRUE(input.LoadFromStream(settings));
-    for (const string key : {"engine", "speller", "translator"})
-      ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
-    ASSERT_TRUE(config->SetString("translator/prism", type));
-    the<Engine> engine(Engine::Create());
-    engine->ApplySchema(new Schema("word_aux_tail_test", config.release()));
-    auto* context = engine->context();
-    auto query = [&](const string& raw, bool enabled) {
-      context->Clear();
-      context->set_option("direct_word_aux", enabled);
-      context->set_input(raw);
-      vector<string> words;
-      if (context->composition().empty())
-        return words;
-      const auto menu = context->composition().back().menu;
-      if (!menu)
-        return words;
-      const auto count = menu->Prepare(50);
-      for (size_t i = 0; i < count; ++i) {
-        auto candidate = menu->GetCandidateAt(i);
-        if (candidate && candidate->end() == raw.size())
-          words.push_back(candidate->text());
+      Config input;
+      ASSERT_TRUE(input.LoadFromStream(settings));
+      for (const string key : {"engine", "speller", "translator"})
+        ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
+      ASSERT_TRUE(config->SetString("translator/prism", type));
+      if (setting == "option") {
+        const string key = "translator/enable_direct_word_aux/option";
+        ASSERT_TRUE(config->SetString(key, "direct_word_aux"));
+      } else if (!setting.empty()) {
+        ASSERT_TRUE(
+            config->SetString("translator/enable_direct_word_aux", setting));
       }
-      return words;
-    };
-    const string base = type == "zrm" ? "nizl" : "nizai";
-    const auto weak = query(base + "f", false);
-    ASSERT_FALSE(weak.empty());
-    EXPECT_EQ("你再烦", weak.front());
-    const auto matched = query(base + "f", true);
-    ASSERT_FALSE(matched.empty());
-    EXPECT_EQ("拟在", matched.front());
-    EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "你再烦"));
-    EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "拟在"));
+      the<Engine> engine(Engine::Create());
+      engine->ApplySchema(new Schema("word_aux_tail_test", config.release()));
+      auto* context = engine->context();
+      auto query = [&](const string& raw, bool enabled) {
+        context->Clear();
+        context->set_option("direct_word_aux", enabled);
+        context->set_input(raw);
+        vector<string> words;
+        if (context->composition().empty())
+          return words;
+        const auto menu = context->composition().back().menu;
+        if (!menu)
+          return words;
+        const auto count = menu->Prepare(50);
+        for (size_t i = 0; i < count; ++i) {
+          auto candidate = menu->GetCandidateAt(i);
+          if (candidate && candidate->end() == raw.size())
+            words.push_back(candidate->text());
+        }
+        return words;
+      };
+      const string base = type == "zrm" ? "nizl" : "nizai";
+      const auto weak = query(base + "f", false);
+      ASSERT_FALSE(weak.empty());
+      EXPECT_EQ(setting == "true" ? "拟在" : "你再烦", weak.front());
+      const auto matched = query(base + "f", true);
+      ASSERT_FALSE(matched.empty());
+      const bool enabled = setting == "true" || setting == "option";
+      EXPECT_EQ(enabled ? "拟在" : "你再烦", matched.front());
+      if (setting != "option")
+        continue;
+      EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "你再烦"));
+      EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "拟在"));
 
-    // A real complete last syllable wins even if the word AUX also matches.
-    const auto complete = query(base + "fa", true);
-    ASSERT_FALSE(complete.empty());
-    EXPECT_EQ("你再发", complete.front());
-    EXPECT_EQ(1, std::count(complete.begin(), complete.end(), "拟在"));
+      // A real complete last syllable wins even if the word AUX also matches.
+      const auto complete = query(base + "fa", true);
+      ASSERT_FALSE(complete.empty());
+      EXPECT_EQ("你再发", complete.front());
+      EXPECT_EQ(1, std::count(complete.begin(), complete.end(), "拟在"));
 
-    // A valid complete spelling without a real phrase is not sufficient.
-    const auto no_phrase = query(base + "fo", true);
-    ASSERT_FALSE(no_phrase.empty());
-    EXPECT_EQ("拟在", no_phrase.front());
-    const auto unmatched = query(base + "k", false);
-    ASSERT_FALSE(unmatched.empty());
-    EXPECT_EQ(unmatched, query(base + "k", true));
+      // A valid complete spelling without a real phrase is not sufficient.
+      const auto no_phrase = query(base + "fo", true);
+      ASSERT_FALSE(no_phrase.empty());
+      EXPECT_EQ("拟在", no_phrase.front());
+      const auto unmatched = query(base + "k", false);
+      ASSERT_FALSE(unmatched.empty());
+      EXPECT_EQ(unmatched, query(base + "k", true));
 
-    // Earlier syllables can be abbreviations. A high-weight weak candidate
-    // must not hide a complete final syllable behind it.
-    const auto short_weak = query("nzf", true);
-    ASSERT_FALSE(short_weak.empty());
-    EXPECT_EQ("拟在", short_weak.front());
-    const auto short_complete = query("nzfa", true);
-    ASSERT_FALSE(short_complete.empty());
-    EXPECT_EQ("你再发", short_complete.front());
-    const auto& words = short_complete;
-    EXPECT_EQ(1, std::count(words.begin(), words.end(), "你再烦"));
+      // Earlier syllables can be abbreviations. A high-weight weak candidate
+      // must not hide a complete final syllable behind it.
+      const auto short_weak = query("nzf", true);
+      ASSERT_FALSE(short_weak.empty());
+      EXPECT_EQ("拟在", short_weak.front());
+      const auto short_complete = query("nzfa", true);
+      ASSERT_FALSE(short_complete.empty());
+      EXPECT_EQ("你再发", short_complete.front());
+      const auto& words = short_complete;
+      EXPECT_EQ(1, std::count(words.begin(), words.end(), "你再烦"));
+    }
   }
 }
