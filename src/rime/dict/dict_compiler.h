@@ -56,6 +56,9 @@ class DictCompiler {
       Config* schema,
       vector<pair<string, an<ConfigList>>>* groups);
   RIME_DLL static bool CompileAuxiliary(const path& schema_file);
+  RIME_DLL static bool CompileAuxiliary(
+      string source_name,
+      const vector<pair<string, an<ConfigList>>>& groups);
   void set_options(int options) { options_ = options; }
 
  private:

@@ -10,7 +10,7 @@
 #include <rime/dict/prism.h>
 #include <rime/context.h>
 #include <rime/engine.h>
-#include <rime/gear/rewriter.h>
+#include <rime/lever/build_compiler.h>
 #include <rime/lever/deployment_tasks.h>
 #include <rime/service.h>
 #include <rime_api.h>
@@ -287,6 +287,58 @@ TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {
   api->destroy_session(session);
 }
 
+namespace {
+
+class ProbeBuildCompiler : public BuildCompiler {
+ public:
+  explicit ProbeBuildCompiler(Deployer* deployer) : deployer_(deployer) {}
+
+  bool Collect(const BuildRequest& request, BuildPlan* plan) override {
+    string value;
+    if (!request.config->GetString("build/probe/value", &value))
+      return false;
+    const path target = deployer_->staging_dir / "probe.bin";
+    CompileUnit unit("probe:" + request.schema_id, 1024, [target, value]() {
+      std::ofstream out(static_cast<const fs::path&>(target));
+      out << value;
+      out.close();
+      return bool(out);
+    });
+    unit.AddOutput("probe.bin");
+    plan->AddUnit(std::move(unit), request.schema_id);
+    return true;
+  }
+
+ private:
+  Deployer* deployer_;
+};
+
+}  // namespace
+
+TEST_F(RimeWorkspacePrismTest, RegisteredBuildCompilerWorksInBothDeployments) {
+  Registry::instance().Register("build/probe",
+                                new Component<ProbeBuildCompiler>);
+  struct Unregister {
+    ~Unregister() { Registry::instance().Unregister("build/probe"); }
+  } unregister;
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/probe:
+    value: ready
+)YAML";
+  WorkspaceUpdate workspace;
+  ASSERT_TRUE(workspace.Run(&deployer_));
+  const path output = deployer_.staging_dir / "probe.bin";
+  ASSERT_TRUE(fs::exists(output));
+  EXPECT_TRUE(fs::remove(output));
+
+  SchemaUpdate schema(path(root_ / "workspace_prism_main.schema.yaml"));
+  ASSERT_TRUE(schema.Run(&deployer_));
+  std::ifstream in(static_cast<const fs::path&>(output));
+  string value;
+  ASSERT_TRUE(in >> value);
+  EXPECT_EQ("ready", value);
+}
+
 TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
   WriteSecondSchema("ab");
   std::ofstream(root_ / "default.custom.yaml") << R"YAML(patch:
@@ -328,4 +380,45 @@ TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
   EXPECT_FALSE(update.Run(&deployer_));
   EXPECT_EQ(built, fs::last_write_time(shared));
   EXPECT_EQ(alias_built, fs::last_write_time(alias));
+}
+
+TEST(RimeBuildPlanTest, ResourceAliasesResolveToOneUnit) {
+  Deployer deployer;
+  BuildPlan plan(&deployer);
+  int runs = 0;
+  CompileUnit first("rewrite:emoji", 1, [&] { return ++runs == 1; });
+  const auto index = plan.AddUnit(std::move(first), "first");
+  ASSERT_TRUE(plan.AddAlias("rewrite:expression", index));
+  plan.AddOwner(index, "second");
+  plan.AddDependency("rewrite:emoji", "rewrite:expression");
+  CompileUnit probe("probe", 1, [&] { return ++runs == 2; });
+  plan.AddUnit(std::move(probe), "second");
+  plan.AddDependency("rewrite:expression", "probe");
+  set<string> failed;
+  ASSERT_TRUE(plan.Run(&failed));
+  EXPECT_TRUE(failed.empty());
+  EXPECT_EQ(2, runs);
+}
+
+TEST_F(RimeWorkspacePrismTest, RejectsConflictingAuxiliaryGroups) {
+  WriteSecondSchema("ab");
+  std::ofstream(root_ / "default.custom.yaml") << R"YAML(patch:
+  schema_list:
+    - schema: workspace_prism_main
+    - schema: workspace_prism_sub
+)YAML";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/auxiliary:
+    dictionary: aux
+    algebra:
+      test: [xform/a/b/]
+)YAML";
+  std::ofstream(root_ / "workspace_prism_sub.custom.yaml") << R"YAML(patch:
+  build/auxiliary:
+    dictionary: aux
+    algebra:
+      test: [xform/a/c/]
+)YAML";
+  EXPECT_FALSE(WorkspaceUpdate().Run(&deployer_));
+  EXPECT_FALSE(fs::exists(deployer_.staging_dir / "test.aux.bin"));
 }

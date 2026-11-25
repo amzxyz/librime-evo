@@ -8,13 +8,14 @@
 #include <rime_api.h>
 #include <rime/common.h>
 #include <rime/dict/rewrite_store.h>
+#include <rime/lever/build_compiler.h>
 
 namespace rime {
 
 class Config;
 class Deployer;
 
-class RIME_DLL RewriteCompiler {
+class RIME_DLL RewriteCompiler : public BuildCompiler {
  public:
   struct SourceFile {
     string declared_name;
@@ -35,7 +36,12 @@ class RIME_DLL RewriteCompiler {
 
   explicit RewriteCompiler(Deployer* deployer) : deployer_(deployer) {}
   bool ReadSpecs(Config* config, vector<Spec>* specs);
-  static bool Compile(const Spec& spec, Deployer* deployer);
+  static bool Compile(const Spec& spec,
+                      Deployer* deployer,
+                      bool rebuild = false);
+  bool Collect(const BuildRequest& request, BuildPlan* plan) override;
+  bool Prepare() override;
+  void Finish() override;
 
  private:
   struct CachedStage {
@@ -45,6 +51,12 @@ class RIME_DLL RewriteCompiler {
   };
   Deployer* deployer_;
   vector<CachedStage> stage_cache_;
+  struct Build {
+    an<Spec> spec;
+    size_t unit;
+    string schema;
+  };
+  map<string, Build> builds_;
 };
 
 }  // namespace rime

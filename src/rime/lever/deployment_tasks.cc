@@ -20,10 +20,9 @@
 #include <rime/setup.h>
 #include <rime/algo/fs.h>
 #include <rime/algo/utilities.h>
-#include <rime/dict/dict_compiler.h>
-#include <rime/lever/compile_unit.h>
+#include <rime/dict/prism_config.h>
+#include <rime/lever/build_compiler.h>
 #include <rime/lever/deployment_tasks.h>
-#include <rime/lever/rewrite_compiler.h>
 #include <rime/lever/user_dict_manager.h>
 #include <rime/path_resolver.h>
 #ifdef _WIN32
@@ -173,20 +172,6 @@ bool InstallationUpdate::Run(Deployer* deployer) {
   return config.SaveToFile(installation_info);
 }
 
-static bool SamePrismAlgebra(const an<ConfigList>& first,
-                             const an<ConfigList>& second) {
-  const size_t size = first ? first->size() : 0;
-  if (size != (second ? second->size() : 0))
-    return false;
-  for (size_t i = 0; i < size; ++i) {
-    auto a = As<ConfigValue>(first->GetAt(i));
-    auto b = As<ConfigValue>(second->GetAt(i));
-    if (!a || !b || a->str() != b->str())
-      return false;
-  }
-  return true;
-}
-
 bool WorkspaceUpdate::Run(Deployer* deployer) {
   LOG(INFO) << "updating workspace.";
   {
@@ -213,29 +198,13 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
 
   if (!MaybeCreateDirectory(deployer->staging_dir))
     return false;
-  RewriteResource::ReleaseForDeployment();
+  BuildPlan plan(deployer);
 
   LOG(INFO) << "updating schemas.";
   int success = 0;
   int failure = 0;
   set<string> seen_schemas;
   vector<string> active_schema_ids;
-  map<string, set<string>> unit_owners;
-  vector<CompileUnit> units;
-  struct DictionaryBuild {
-    an<DictCompiler::DictionarySpec> definition;
-    size_t unit;
-    string schema;
-  };
-  struct PrismBuild {
-    string dictionary;
-    string schema;
-    an<ConfigList> algebra;
-  };
-  map<string, DictionaryBuild> dictionary_builds;
-  map<string, PrismBuild> prism_builds;
-  RewriteCompiler rewrite_compiler(deployer);
-  map<string, pair<an<RewriteCompiler::Spec>, size_t>> rewrite_builds;
   auto schema_component = Config::Require("schema");
   the<ResourceResolver> resolver(Service::instance().CreateResourceResolver(
       {"schema_source_file", "", ".schema.yaml"}));
@@ -262,142 +231,25 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
       continue;
     }
     the<Config> schema_config(schema_component->Create(schema_id));
-    vector<DictCompiler::DictionarySpec> definitions;
-    if (!schema_config ||
-        !DictCompiler::ReadDictionarySpecs(schema_config.get(), &definitions)) {
+    if (!schema_config) {
       ++failure;
       continue;
     }
     const path compiled_schema = compiled_resolver->ResolvePath(schema_id);
-    for (const auto& definition : definitions) {
-      auto existing = dictionary_builds.find(definition.name);
-      if (existing == dictionary_builds.end()) {
-        auto shared = New<DictCompiler::DictionarySpec>();
-        shared->name = definition.name;
-        shared->packs = definition.packs;
-        existing =
-            dictionary_builds
-                .emplace(definition.name,
-                         DictionaryBuild{shared, units.size(), schema_id})
-                .first;
-        units.emplace_back(schema_id + ":dictionary:" + definition.name,
-                           DictCompiler::EstimateMemory(definition.name, false,
-                                                        definition.packs),
-                           [shared, compiled_schema]() {
-                             return DictCompiler::CompileDictionary(
-                                 *shared, compiled_schema);
-                           });
-        for (const char* suffix :
-             {".table.bin", ".reverse.bin", ".packs.table.bin"}) {
-          units.back().AddOutput(
-              path(definition.name + suffix).filename().to_utf8_string());
-        }
-      } else if (existing->second.definition->packs != definition.packs) {
-        LOG(ERROR) << "conflicting packs for dictionary '" << definition.name
-                   << "' in schemas '" << existing->second.schema << "' and '"
-                   << schema_id << "'";
-        return false;
-      }
-      auto& build = existing->second;
-      auto& unit = units[build.unit];
-      unit_owners[unit.id()].insert(schema_id);
-      for (const auto& prism : definition.prisms) {
-        const string output =
-            path(prism.first + ".prism.bin").filename().to_utf8_string();
-        const auto [owner, added] = prism_builds.emplace(
-            output, PrismBuild{definition.name, schema_id, prism.second});
-        if (added) {
-          build.definition->prisms.push_back(prism);
-          unit.AddOutput(output);
-        } else if (owner->second.dictionary != definition.name ||
-                   !SamePrismAlgebra(owner->second.algebra, prism.second)) {
-          LOG(ERROR) << "conflicting prism '" << output << "' in schemas '"
-                     << owner->second.schema << "' and '" << schema_id
-                     << "'; use distinct algebra group names";
-          return false;
-        }
-      }
-    }
-    vector<pair<string, an<ConfigList>>> auxiliary;
-    if (!DictCompiler::ReadAuxiliarySpecs(schema_config.get(), &auxiliary)) {
-      ++failure;
-      continue;
-    }
-    if (!auxiliary.empty()) {
-      string source;
-      schema_config->GetString("build/auxiliary/dictionary", &source);
-      CompileUnit unit(schema_id + ":auxiliary",
-                       DictCompiler::EstimateMemory(source, true),
-                       [compiled_schema]() {
-                         return DictCompiler::CompileAuxiliary(compiled_schema);
-                       });
-      for (const auto& group : auxiliary)
-        unit.AddOutput(
-            path(group.first + ".aux.bin").filename().to_utf8_string());
-      unit_owners[unit.id()].insert(schema_id);
-      units.push_back(std::move(unit));
-    }
-    vector<RewriteCompiler::Spec> rewrites;
-    if (!rewrite_compiler.ReadSpecs(schema_config.get(), &rewrites))
+    if (!PrismConfig::ValidateReferences(schema_config.get()) ||
+        !plan.Collect(schema_id, schema_config.get(), compiled_schema))
       return false;
-    for (auto& definition : rewrites) {
-      auto existing = rewrite_builds.find(definition.name);
-      if (existing == rewrite_builds.end()) {
-        auto shared =
-            std::find_if(rewrite_builds.begin(), rewrite_builds.end(),
-                         [&](const auto& item) {
-                           return item.second.first->ids == definition.ids;
-                         });
-        if (shared != rewrite_builds.end()) {
-          auto& spec = shared->second.first;
-          spec->aliases.push_back(definition.name);
-          units[shared->second.second].AddOutput(
-              RewriteStore::FileName(definition.name));
-          existing =
-              rewrite_builds.emplace(definition.name, shared->second).first;
-          unit_owners[units[existing->second.second].id()].insert(schema_id);
-          continue;
-        }
-        auto spec = New<RewriteCompiler::Spec>(std::move(definition));
-        const auto index = units.size();
-        existing =
-            rewrite_builds.emplace(spec->name, std::make_pair(spec, index))
-                .first;
-        units.emplace_back("rewrite:" + spec->name, spec->estimated_memory,
-                           [spec, deployer]() {
-                             return RewriteCompiler::Compile(*spec, deployer);
-                           });
-        units.back().AddOutput(RewriteStore::FileName(spec->name));
-      } else if (existing->second.first->ids != definition.ids) {
-        LOG(ERROR) << "conflicting rewrite resource '" << definition.name
-                   << "'.";
-        return false;
-      }
-      unit_owners[units[existing->second.second].id()].insert(schema_id);
-    }
     active_schema_ids.push_back(schema_id);
   }
-  CompileGraph graph;
-  for (auto& unit : units) {
-    if (!graph.AddUnit(std::move(unit)))
-      return false;
-  }
-  CompileScheduler scheduler;
-  auto result = scheduler.Run(graph);
-  if (!result)
-    return false;
   set<string> failed_schemas;
-  for (const auto& unit : result->failed_units) {
-    const auto& owners = unit_owners.at(unit);
-    failed_schemas.insert(owners.begin(), owners.end());
-  }
+  if (!plan.Run(&failed_schemas))
+    return false;
   for (const auto& schema_id : active_schema_ids) {
     if (failed_schemas.count(schema_id))
       ++failure;
     else
       ++success;
   }
-  RewriteResource::ReleaseForDeployment();
 
   LOG(INFO) << "finished updating schemas: " << success << " success, "
             << failure << " failure.";
@@ -506,24 +358,12 @@ bool SchemaUpdate::Run(Deployer* deployer) {
   if (!MaybeCreateDirectory(deployer->staging_dir)) {
     return false;
   }
-  const int options =
-      verbose_ ? DictCompiler::kRebuild | DictCompiler::kDump : 0;
-  const bool dictionaries_ok =
-      DictCompiler::CompileDictionaries(compiled_schema, options);
-  const bool auxiliary_ok = DictCompiler::CompileAuxiliary(compiled_schema);
   config.reset(Config::Require("schema")->Create(schema_id));
-  RewriteResource::ReleaseForDeployment();
-  RewriteCompiler rewrite_compiler(deployer);
-  vector<RewriteCompiler::Spec> rewrites;
-  bool rewrites_ok = rewrite_compiler.ReadSpecs(config.get(), &rewrites);
-  if (rewrites_ok) {
-    for (const auto& spec : rewrites) {
-      if (!RewriteCompiler::Compile(spec, deployer))
-        rewrites_ok = false;
-    }
-  }
-  RewriteResource::ReleaseForDeployment();
-  return dictionaries_ok && auxiliary_ok && rewrites_ok;
+  BuildPlan plan(deployer, verbose_, verbose_);
+  set<string> failed_schemas;
+  return PrismConfig::ValidateReferences(config.get()) &&
+         plan.Collect(schema_id, config.get(), compiled_schema) &&
+         plan.Run(&failed_schemas) && failed_schemas.empty();
 }
 
 ConfigFileUpdate::ConfigFileUpdate(TaskInitializer arg) {
