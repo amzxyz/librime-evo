@@ -259,6 +259,8 @@ typedef struct rime_module_t {
   void (*initialize)(void);
   void (*finalize)(void);
   RimeCustomApi* (*get_api)(void);
+  // Opt in to initialization in a deployment-only process.
+  Bool load_for_deployment;
 } RimeModule;
 
 RIME_API Bool RimeRegisterModule(RimeModule* module);
@@ -549,37 +551,46 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)(void);
  *  and rime_<module_name>_finalize().
  *  \sa core_module.cc for an example.
  */
-#define RIME_REGISTER_MODULE(name)                          \
-  void rime_require_module_##name() {}                      \
-  RIME_MODULE_INITIALIZER(rime_register_module_##name) {    \
-    static RimeModule module = {0, NULL, NULL, NULL, NULL}; \
-    if (!module.data_size) {                                \
-      RIME_STRUCT_INIT(RimeModule, module);                 \
-      module.module_name = #name;                           \
-      module.initialize = rime_##name##_initialize;         \
-      module.finalize = rime_##name##_finalize;             \
-    }                                                       \
-    RimeRegisterModule(&module);                            \
+#define RIME_REGISTER_MODULE(name)                                 \
+  void rime_require_module_##name() {}                             \
+  RIME_MODULE_INITIALIZER(rime_register_module_##name) {           \
+    static RimeModule module = {0, NULL, NULL, NULL, NULL, False}; \
+    if (!module.data_size) {                                       \
+      RIME_STRUCT_INIT(RimeModule, module);                        \
+      module.module_name = #name;                                  \
+      module.initialize = rime_##name##_initialize;                \
+      module.finalize = rime_##name##_finalize;                    \
+    }                                                              \
+    RimeRegisterModule(&module);                                   \
   }
 
 /*!
  *  Customize the module by assigning additional functions, eg. module->get_api.
  */
-#define RIME_REGISTER_CUSTOM_MODULE(name)                       \
-  void rime_require_module_##name() {}                          \
-  static void rime_customize_module_##name(RimeModule* module); \
-  RIME_MODULE_INITIALIZER(rime_register_module_##name) {        \
-    static RimeModule module = {0, NULL, NULL, NULL, NULL};     \
-    if (!module.data_size) {                                    \
-      RIME_STRUCT_INIT(RimeModule, module);                     \
-      module.module_name = #name;                               \
-      module.initialize = rime_##name##_initialize;             \
-      module.finalize = rime_##name##_finalize;                 \
-      rime_customize_module_##name(&module);                    \
-    }                                                           \
-    RimeRegisterModule(&module);                                \
-  }                                                             \
+#define RIME_REGISTER_CUSTOM_MODULE(name)                          \
+  void rime_require_module_##name() {}                             \
+  static void rime_customize_module_##name(RimeModule* module);    \
+  RIME_MODULE_INITIALIZER(rime_register_module_##name) {           \
+    static RimeModule module = {0, NULL, NULL, NULL, NULL, False}; \
+    if (!module.data_size) {                                       \
+      RIME_STRUCT_INIT(RimeModule, module);                        \
+      module.module_name = #name;                                  \
+      module.initialize = rime_##name##_initialize;                \
+      module.finalize = rime_##name##_finalize;                    \
+      rime_customize_module_##name(&module);                       \
+    }                                                              \
+    RimeRegisterModule(&module);                                   \
+  }                                                                \
   static void rime_customize_module_##name(RimeModule* module)
+
+/*!
+ *  Register a module that may also be initialized without runtime gears.
+ *  Its initialize/finalize functions follow the normal module lifecycle.
+ */
+#define RIME_REGISTER_DEPLOYER_MODULE(name) \
+  RIME_REGISTER_CUSTOM_MODULE(name) {       \
+    module->load_for_deployment = True;     \
+  }
 
 /*!
  *  Defines a constant for a list of module names.

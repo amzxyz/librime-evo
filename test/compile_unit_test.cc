@@ -126,18 +126,23 @@ TEST(RimeCompileUnitTest, SerializedUnitsRunOnCallingThread) {
   EXPECT_EQ(2, on_caller);
 }
 
-TEST(RimeCompileUnitTest, FailureDoesNotBlockSuccessors) {
+TEST(RimeCompileUnitTest, FailureBlocksOnlyResourceDependents) {
   CompileGraph graph;
   std::atomic<int> good_runs{0};
   ASSERT_TRUE(graph.AddUnit(MakeUnit("bad", [] { return false; })));
   ASSERT_TRUE(graph.AddUnit(MakeUnit("good", [&] { return ++good_runs > 0; })));
   ASSERT_TRUE(graph.AddDependency("bad", "good"));
+  ASSERT_TRUE(graph.AddUnit(MakeUnit("leaf", [&] { return ++good_runs > 0; })));
+  ASSERT_TRUE(graph.AddDependency("good", "leaf"));
+  ASSERT_TRUE(
+      graph.AddUnit(MakeUnit("independent", [&] { return ++good_runs > 0; })));
 
   CompileScheduler scheduler;
   auto result = scheduler.Run(graph);
   ASSERT_TRUE(result);
   EXPECT_EQ(1, result->success);
-  EXPECT_EQ(1, result->failure);
+  EXPECT_EQ(3, result->failure);
+  EXPECT_EQ((vector<string>{"good", "leaf"}), result->skipped_units);
   EXPECT_EQ(1, good_runs);
 }
 
@@ -150,10 +155,10 @@ TEST(RimeCompileUnitTest, RejectsInvalidUnits) {
   EXPECT_FALSE(graph.AddDependency("missing", "a"));
   EXPECT_FALSE(graph.AddDependency("a", "missing"));
   EXPECT_TRUE(graph.AddDependency("a", "b"));
-  EXPECT_TRUE(graph.AddDependency("a", "a"));
+  EXPECT_FALSE(graph.AddDependency("a", "a"));
 }
 
-TEST(RimeCompileUnitTest, DeclarationOrderWinsOverContradictingDependency) {
+TEST(RimeCompileUnitTest, DependencyWorksInReverseDeclarationOrder) {
   CompileGraph graph;
   std::mutex mutex;
   vector<string> order;
@@ -164,8 +169,7 @@ TEST(RimeCompileUnitTest, DeclarationOrderWinsOverContradictingDependency) {
   };
   ASSERT_TRUE(graph.AddUnit(MakeUnit("b", [&] { return record("b"); })));
   ASSERT_TRUE(graph.AddUnit(MakeUnit("a", [&] { return record("a"); })));
-  // "a" was declared after "b"; this request is ignored instead of creating a
-  // cycle with declaration order.
+  // The prerequisite may be discovered after the dependent.
   EXPECT_TRUE(graph.AddDependency("a", "b"));
 
   CompileScheduler scheduler;
@@ -173,6 +177,33 @@ TEST(RimeCompileUnitTest, DeclarationOrderWinsOverContradictingDependency) {
   ASSERT_TRUE(result);
   EXPECT_EQ(2, result->success);
   EXPECT_EQ(0, result->failure);
+  EXPECT_EQ((vector<string>{"a", "b"}), order);
+}
+
+TEST(RimeCompileUnitTest, RejectsDependencyCyclesBeforeRunning) {
+  CompileGraph graph;
+  int runs = 0;
+  ASSERT_TRUE(graph.AddUnit(MakeUnit("a", [&] { return ++runs > 0; })));
+  ASSERT_TRUE(graph.AddUnit(MakeUnit("b", [&] { return ++runs > 0; })));
+  ASSERT_TRUE(graph.AddDependency("a", "b"));
+  ASSERT_TRUE(graph.AddDependency("b", "a"));
+  EXPECT_FALSE(CompileScheduler().Run(graph));
+  EXPECT_EQ(0, runs);
+}
+
+TEST(RimeCompileUnitTest, OutputOrderingDoesNotPropagateFailure) {
+  CompileGraph graph;
+  auto first = MakeUnit("first", [] { return false; });
+  first.AddOutput("shared");
+  auto second = MakeUnit("second", [] { return true; });
+  second.AddOutput("shared");
+  ASSERT_TRUE(graph.AddUnit(std::move(first)));
+  ASSERT_TRUE(graph.AddUnit(std::move(second)));
+  auto result = CompileScheduler().Run(graph);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(1, result->success);
+  EXPECT_EQ(1, result->failure);
+  EXPECT_TRUE(result->skipped_units.empty());
 }
 
 TEST(RimeCompileUnitTest, OversizedUnitsAreSerialized) {

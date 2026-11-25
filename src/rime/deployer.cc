@@ -25,6 +25,44 @@ Deployer::~Deployer() {
   JoinWorkThread();
 }
 
+bool Deployer::RunSchemaDeployment(
+    const function<bool(vector<string>*)>& select,
+    const function<bool(DeploymentResult*)>& work) {
+  if (deploying_schemas_.exchange(true)) {
+    LOG(ERROR) << "schema deployment is already running.";
+    return false;
+  }
+  struct Reset {
+    std::atomic<bool>& running;
+    ~Reset() { running = false; }
+  } reset{deploying_schemas_};
+  DeploymentResult result;
+  try {
+    if (!select(&result.schema_ids))
+      return false;
+  } catch (const std::exception& ex) {
+    LOG(ERROR) << "schema selection failed: " << ex.what();
+    return false;
+  } catch (...) {
+    LOG(ERROR) << "schema selection failed.";
+    return false;
+  }
+  try {
+    result.success = before_deploy_(this, result.schema_ids) && work(&result);
+  } catch (const std::exception& ex) {
+    LOG(ERROR) << "schema deployment failed: " << ex.what();
+  } catch (...) {
+    LOG(ERROR) << "schema deployment failed.";
+  }
+  for (const auto& id : result.schema_ids) {
+    if (!result.successful_schemas.count(id))
+      result.failed_schemas.insert(id);
+  }
+  result.success = result.success && result.failed_schemas.empty();
+  after_deploy_(this, result);
+  return result.success;
+}
+
 bool Deployer::RunTask(const string& task_name, TaskInitializer arg) {
   auto c = DeploymentTask::Require(task_name);
   if (!c) {

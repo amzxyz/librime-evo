@@ -17,6 +17,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <system_error>
 #include "rime/config/config_component.h"
 #include "rime/registry.h"
@@ -298,7 +299,11 @@ class ProbeBuildCompiler : public BuildCompiler {
     if (!request.config->GetString("build/probe/value", &value))
       return false;
     const path target = deployer_->staging_dir / "probe.bin";
-    CompileUnit unit("probe:" + request.schema_id, 1024, [target, value]() {
+    const path table = deployer_->staging_dir / "workspace_prism.table.bin";
+    const string id = "probe:" + request.schema_id;
+    CompileUnit unit(id, 1024, [target, table, value]() {
+      if (!fs::exists(table))
+        return false;
       std::ofstream out(static_cast<const fs::path&>(target));
       out << value;
       out.close();
@@ -306,6 +311,7 @@ class ProbeBuildCompiler : public BuildCompiler {
     });
     unit.AddOutput("probe.bin");
     plan->AddUnit(std::move(unit), request.schema_id);
+    plan->AddDependency("dictionary:workspace_prism", id);
     return true;
   }
 
@@ -315,18 +321,24 @@ class ProbeBuildCompiler : public BuildCompiler {
 
 }  // namespace
 
-TEST_F(RimeWorkspacePrismTest, RegisteredBuildCompilerWorksInBothDeployments) {
+static void rime_deploy_probe_initialize() {
   Registry::instance().Register("build/probe",
                                 new Component<ProbeBuildCompiler>);
-  struct Unregister {
-    ~Unregister() { Registry::instance().Unregister("build/probe"); }
-  } unregister;
+}
+
+static void rime_deploy_probe_finalize() {}
+
+RIME_REGISTER_DEPLOYER_MODULE(deploy_probe)
+
+TEST_F(RimeWorkspacePrismTest, RegisteredBuildCompilerWorksInBothDeployments) {
+  EXPECT_FALSE(BuildCompiler::Require("build/probe"));
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
   build/probe:
     value: ready
 )YAML";
   WorkspaceUpdate workspace;
   ASSERT_TRUE(workspace.Run(&deployer_));
+  ASSERT_TRUE(BuildCompiler::Require("build/probe"));
   const path output = deployer_.staging_dir / "probe.bin";
   ASSERT_TRUE(fs::exists(output));
   EXPECT_TRUE(fs::remove(output));
@@ -382,6 +394,93 @@ TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
   EXPECT_EQ(alias_built, fs::last_write_time(alias));
 }
 
+TEST_F(RimeWorkspacePrismTest, NotifiesOnceForWholeSchemaBatch) {
+  WriteSecondSchema("ab");
+  std::ofstream(root_ / "default.custom.yaml") << R"YAML(patch:
+  schema_list:
+    - schema: workspace_prism_main
+    - schema: workspace_prism_sub
+)YAML";
+  int before = 0;
+  int after = 0;
+  const vector<string> ids{"workspace_prism_main", "workspace_prism_sub"};
+  const set<string> expected(ids.begin(), ids.end());
+  auto prepare = [&](Deployer* deployer, const vector<string>& schemas) {
+    EXPECT_EQ(&deployer_, deployer);
+    EXPECT_EQ(ids, schemas);
+    ++before;
+    const path table = deployer_.staging_dir / "workspace_prism.table.bin";
+    EXPECT_FALSE(fs::exists(table));
+    std::ofstream(root_ / "workspace_prism_main.custom.yaml")
+        << "patch:\n  build/probe:\n    value: prepared\n";
+  };
+  auto complete = [&](Deployer* deployer, const DeploymentResult& result) {
+    EXPECT_EQ(&deployer_, deployer);
+    ++after;
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(ids, result.schema_ids);
+    EXPECT_EQ(expected, result.successful_schemas);
+    EXPECT_TRUE(result.failed_schemas.empty());
+    EXPECT_TRUE(fs::exists(deployer_.staging_dir / "probe.bin"));
+    const path prism =
+        deployer_.staging_dir / "workspace_prism.standalone.prism.bin";
+    EXPECT_TRUE(fs::exists(prism));
+  };
+  boost::signals2::scoped_connection before_connection(
+      deployer_.before_deploy().connect(prepare));
+  boost::signals2::scoped_connection after_connection(
+      deployer_.after_deploy().connect(complete));
+  EXPECT_TRUE(WorkspaceUpdate().Run(&deployer_));
+  EXPECT_EQ(1, before);
+  EXPECT_EQ(1, after);
+}
+
+TEST(RimeDeploymentLifecycleTest, FailureAndObserverExceptionsAreReported) {
+  Deployer deployer;
+  const vector<string> ids{"first", "second"};
+  auto select = [&](vector<string>* schemas) {
+    *schemas = ids;
+    return true;
+  };
+  int observers = 0;
+  int work = 0;
+  int after = 0;
+  boost::signals2::scoped_connection throwing(
+      deployer.before_deploy().connect([](Deployer*, const vector<string>&) {
+        throw std::runtime_error("preparation failed");
+      }));
+  const set<string> expected(ids.begin(), ids.end());
+  auto observe = [&](Deployer*, const vector<string>&) { ++observers; };
+  auto finish = [&](Deployer*, const DeploymentResult& result) {
+    ++after;
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(ids, result.schema_ids);
+    EXPECT_TRUE(result.successful_schemas.empty());
+    EXPECT_EQ(expected, result.failed_schemas);
+  };
+  boost::signals2::scoped_connection observer(
+      deployer.before_deploy().connect(observe));
+  boost::signals2::scoped_connection complete(
+      deployer.after_deploy().connect(finish));
+  EXPECT_FALSE(deployer.RunSchemaDeployment(select, [&](DeploymentResult*) {
+    ++work;
+    return true;
+  }));
+  EXPECT_EQ(0, work);
+  EXPECT_EQ(1, observers);
+  EXPECT_EQ(1, after);
+  throwing.disconnect();
+  EXPECT_FALSE(deployer.RunSchemaDeployment(select, [&](DeploymentResult*) {
+    ++work;
+    EXPECT_FALSE(deployer.RunSchemaDeployment(
+        select, [](DeploymentResult*) { return true; }));
+    return false;
+  }));
+  EXPECT_EQ(1, work);
+  EXPECT_EQ(2, observers);
+  EXPECT_EQ(2, after);
+}
+
 TEST(RimeBuildPlanTest, ResourceAliasesResolveToOneUnit) {
   Deployer deployer;
   BuildPlan plan(&deployer);
@@ -421,4 +520,35 @@ TEST_F(RimeWorkspacePrismTest, RejectsConflictingAuxiliaryGroups) {
 )YAML";
   EXPECT_FALSE(WorkspaceUpdate().Run(&deployer_));
   EXPECT_FALSE(fs::exists(deployer_.staging_dir / "test.aux.bin"));
+}
+
+TEST_F(RimeWorkspacePrismTest, FailedConfigBuildIsReported) {
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/dictionaries/workspace_prism:
+    __include: missing_config:/missing
+)YAML";
+  int notifications = 0;
+  auto complete = [&](Deployer*, const DeploymentResult& result) {
+    ++notifications;
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.successful_schemas.empty());
+    EXPECT_EQ((set<string>{"workspace_prism_main"}), result.failed_schemas);
+  };
+  boost::signals2::scoped_connection connection(
+      deployer_.after_deploy().connect(complete));
+  EXPECT_FALSE(WorkspaceUpdate().Run(&deployer_));
+  EXPECT_EQ(1, notifications);
+  EXPECT_FALSE(fs::exists(deployer_.staging_dir / "workspace_prism.table.bin"));
+}
+
+TEST_F(RimeWorkspacePrismTest, ReentryCannotModifyWorkspace) {
+  auto prepare = [&](Deployer*, const vector<string>&) {
+    const path compiled = deployer_.staging_dir / "default.yaml";
+    ASSERT_TRUE(fs::remove(compiled));
+    EXPECT_FALSE(WorkspaceUpdate().Run(&deployer_));
+    EXPECT_FALSE(fs::exists(compiled));
+  };
+  boost::signals2::scoped_connection connection(
+      deployer_.before_deploy().connect(prepare));
+  EXPECT_TRUE(WorkspaceUpdate().Run(&deployer_));
 }

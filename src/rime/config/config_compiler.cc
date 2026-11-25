@@ -59,15 +59,17 @@ bool PendingChild::Resolve(ConfigCompiler* compiler) {
 }
 
 static an<ConfigItem> ResolveReference(ConfigCompiler* compiler,
-                                       const Reference& reference);
+                                       const Reference& reference,
+                                       bool* failed);
 
 static bool MergeTree(an<ConfigItemRef> target, an<ConfigMap> map);
 
 bool IncludeReference::Resolve(ConfigCompiler* compiler) {
   DLOG(INFO) << "IncludeReference::Resolve(reference = " << reference << ")";
-  auto included = ResolveReference(compiler, reference);
+  bool failed = false;
+  auto included = ResolveReference(compiler, reference, &failed);
   if (!included) {
-    return reference.optional;
+    return reference.optional && !failed;
   }
   // merge literal key-values into the included map
   auto overrides = As<ConfigMap>(**target);
@@ -81,9 +83,10 @@ bool IncludeReference::Resolve(ConfigCompiler* compiler) {
 
 bool PatchReference::Resolve(ConfigCompiler* compiler) {
   DLOG(INFO) << "PatchReference::Resolve(reference = " << reference << ")";
-  auto item = ResolveReference(compiler, reference);
+  bool failed = false;
+  auto item = ResolveReference(compiler, reference, &failed);
   if (!item) {
-    return reference.optional;
+    return reference.optional && !failed;
   }
   if (!Is<ConfigMap>(item)) {
     LOG(ERROR) << "invalid patch at " << reference;
@@ -390,8 +393,8 @@ an<ConfigResource> ConfigCompiler::Compile(const string& file_name) {
   resource->loaded = resource->data->LoadFromFile(
       resource_resolver_->ResolvePath(resource_id), this);
   Pop();
-  if (plugin_)
-    plugin_->ReviewCompileOutput(this, resource);
+  if (plugin_ && !plugin_->ReviewCompileOutput(this, resource))
+    resource->loaded = false;
   return resource;
 }
 
@@ -410,13 +413,15 @@ static bool ResolveBlockingDependencies(ConfigCompiler* compiler,
 
 static an<ConfigItem> GetResolvedItem(ConfigCompiler* compiler,
                                       an<ConfigResource> resource,
-                                      const string& path) {
+                                      const string& path,
+                                      bool* failed) {
   DLOG(INFO) << "GetResolvedItem(" << resource->resource_id << ":" << path
              << ")";
   string node_path = resource->resource_id + ":";
   an<ConfigItemRef> node = resource;
   if (path.empty() || path == "/") {
-    return compiler->ResolveDependencies(node_path) ? **node : nullptr;
+    *failed = !compiler->ResolveDependencies(node_path);
+    return *failed ? nullptr : **node;
   }
   vector<string> keys = ConfigData::SplitPath(path);
   for (const auto& key : keys) {
@@ -449,7 +454,10 @@ static an<ConfigItem> GetResolvedItem(ConfigCompiler* compiler,
       return nullptr;
     }
   }
-  return compiler->ResolveDependencies(node_path) ? **node : nullptr;
+  // An optional reference may be absent, but an existing node with
+  // unresolved dependencies is a compilation error.
+  *failed = !compiler->ResolveDependencies(node_path);
+  return *failed ? nullptr : **node;
 }
 
 bool ConfigCompiler::blocking(const string& full_path) const {
@@ -473,7 +481,8 @@ vector<of<Dependency>> ConfigCompiler::GetDependencies(const string& path) {
 }
 
 static an<ConfigItem> ResolveReference(ConfigCompiler* compiler,
-                                       const Reference& reference) {
+                                       const Reference& reference,
+                                       bool* failed) {
   auto resource = compiler->GetCompiledResource(reference.resource_id);
   if (!resource) {
     DLOG(INFO) << "resource not loaded, compiling: " << reference.resource_id;
@@ -487,7 +496,7 @@ static an<ConfigItem> ResolveReference(ConfigCompiler* compiler,
       return nullptr;
     }
   }
-  return GetResolvedItem(compiler, resource, reference.local_path);
+  return GetResolvedItem(compiler, resource, reference.local_path, failed);
 }
 
 // Includes contents of nodes at specified paths.
