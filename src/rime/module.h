@@ -22,6 +22,7 @@ class ModuleManager {
   RimeModule* Find(const string& name);
 
   void LoadModule(RimeModule* module);
+  void LoadDeploymentModules();
   void UnloadModules();
 
   static ModuleManager& instance();

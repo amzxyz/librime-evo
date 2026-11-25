@@ -119,9 +119,24 @@ bool BuildPlan::Run(set<string>* failed_schemas) {
 
   struct FinishCompilers {
     vector<BuildCompiler*> prepared;
-    ~FinishCompilers() {
-      for (auto it = prepared.rbegin(); it != prepared.rend(); ++it)
-        (*it)->Finish();
+    ~FinishCompilers() { Finish(); }
+
+    bool Finish() {
+      bool success = true;
+      while (!prepared.empty()) {
+        auto* compiler = prepared.back();
+        prepared.pop_back();
+        try {
+          compiler->Finish();
+        } catch (const std::exception& ex) {
+          LOG(ERROR) << "compiler cleanup failed: " << ex.what();
+          success = false;
+        } catch (...) {
+          LOG(ERROR) << "compiler cleanup failed.";
+          success = false;
+        }
+      }
+      return success;
     }
   } finish;
   for (const auto& entry : compilers_) {
@@ -137,7 +152,7 @@ bool BuildPlan::Run(set<string>* failed_schemas) {
     const auto& owners = owners_.at(unit);
     failed_schemas->insert(owners.begin(), owners.end());
   }
-  return true;
+  return finish.Finish();
 }
 
 }  // namespace rime

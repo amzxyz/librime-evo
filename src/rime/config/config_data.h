@@ -42,6 +42,7 @@ class ConfigData {
   void set_auto_save(bool auto_save) { auto_save_ = auto_save; }
 
   an<ConfigItem> root;
+  bool build_succeeded = false;
 
  protected:
   path file_path_;

@@ -34,6 +34,8 @@ class Config : public Class<Config, const string&>, public ConfigItemRef {
   bool SaveToStream(std::ostream& stream);
   RIME_DLL bool LoadFromFile(const path& file_path);
   RIME_DLL bool SaveToFile(const path& file_path);
+  // Whether the config builder successfully compiled and linked this data.
+  RIME_DLL bool build_succeeded() const;
 
   // access a tree node of a particular type with "path/to/node"
   RIME_DLL bool IsNull(const string& path);

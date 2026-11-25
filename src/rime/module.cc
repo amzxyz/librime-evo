@@ -36,6 +36,17 @@ void ModuleManager::LoadModule(RimeModule* module) {
   }
 }
 
+void ModuleManager::LoadDeploymentModules() {
+  vector<RimeModule*> modules;
+  for (const auto& entry : map_) {
+    auto* module = entry.second;
+    if (RIME_PROVIDED(module, load_for_deployment))
+      modules.push_back(module);
+  }
+  for (auto* module : modules)
+    LoadModule(module);
+}
+
 void ModuleManager::UnloadModules() {
   for (auto module : loaded_) {
     if (module->finalize != NULL) {

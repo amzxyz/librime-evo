@@ -46,11 +46,16 @@ RIME_REGISTER_MODULE_GROUP(deployer, "core", "dict", "levers")
 
 RIME_DLL void LoadModules(const char* module_names[]) {
   ModuleManager& mm(ModuleManager::instance());
+  bool deployment = false;
   for (const char** m = module_names; *m; ++m) {
     if (RimeModule* module = mm.Find(*m)) {
       mm.LoadModule(module);
+      if (string(*m) == "deployer")
+        deployment = true;
     }
   }
+  if (deployment)
+    mm.LoadDeploymentModules();
 }
 
 RIME_DLL void SetupDeployer(RimeTraits* traits) {

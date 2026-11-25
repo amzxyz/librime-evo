@@ -47,8 +47,8 @@ class RIME_DLL CompileUnit {
   function<bool()> run_;
 };
 
-// A graph of compile units. Dependencies are expressed as ordering constraints
-// only: a failed unit does not prevent its successors from running.
+// A graph of compile units. Explicit dependencies require successful
+// prerequisites; shared outputs impose ordering only.
 class RIME_DLL CompileGraph {
  public:
   CompileGraph() = default;
@@ -57,10 +57,9 @@ class RIME_DLL CompileGraph {
 
   // Returns false if the unit is invalid or its id is already used.
   bool AddUnit(CompileUnit unit);
-  // Declares that |prerequisite| is compiled before |dependent| when possible.
-  // Declaration order wins: if |dependent| was declared earlier, the request
-  // is ignored because output ordering already fixes declaration order.
-  // Returns false only when either unit is unknown.
+  // Requires |prerequisite| to succeed before |dependent| runs, regardless
+  // of declaration order. Returns false for unknown units or self-dependency.
+  // Cycles are rejected by the scheduler before executing any unit.
   bool AddDependency(const string& prerequisite, const string& dependent);
 
   size_t size() const { return units_.size(); }
@@ -79,6 +78,7 @@ class RIME_DLL CompileScheduler {
     int success = 0;
     int failure = 0;
     vector<string> failed_units;
+    vector<string> skipped_units;  // included in failed_units and failure
   };
   // Returns nullopt if the graph contains a cycle; unit failures are counted.
   std::optional<Result> Run(const CompileGraph& graph);

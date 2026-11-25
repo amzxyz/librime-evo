@@ -172,93 +172,96 @@ bool InstallationUpdate::Run(Deployer* deployer) {
   return config.SaveToFile(installation_info);
 }
 
-bool WorkspaceUpdate::Run(Deployer* deployer) {
-  LOG(INFO) << "updating workspace.";
-  {
-    the<DeploymentTask> t;
-    t.reset(new ConfigFileUpdate("default.yaml", "config_version"));
-    t->Run(deployer);
-    // Deprecated: symbols.yaml is only used as source file
-    // t.reset(new ConfigFileUpdate("symbols.yaml", "config_version"));
-    // t->Run(deployer);
-    t.reset(new SymlinkingPrebuiltDictionaries);
-    t->Run(deployer);
-  }
-
-  the<Config> config(Config::Require("config")->Create("default"));
-  if (!config) {
-    LOG(ERROR) << "Error loading default config.";
-    return false;
-  }
-  auto schema_list = config->GetList("schema_list");
-  if (!schema_list) {
-    LOG(WARNING) << "schema list not defined.";
-    return false;
-  }
-
+// All schema deployment entry points share one compilation batch.
+static bool DeploySchemas(Deployer* deployer,
+                          DeploymentResult* result,
+                          bool verbose = false) {
   if (!MaybeCreateDirectory(deployer->staging_dir))
     return false;
-  BuildPlan plan(deployer);
-
-  LOG(INFO) << "updating schemas.";
-  int success = 0;
-  int failure = 0;
-  set<string> seen_schemas;
-  vector<string> active_schema_ids;
-  auto schema_component = Config::Require("schema");
+  BuildPlan plan(deployer, verbose, verbose);
+  vector<string> prepared;
   the<ResourceResolver> resolver(Service::instance().CreateResourceResolver(
       {"schema_source_file", "", ".schema.yaml"}));
   the<ResourceResolver> compiled_resolver(
       Service::instance().CreateDeployedResourceResolver(
           {"compiled_schema", "", ".schema.yaml"}));
-  for (const auto& item : *schema_list) {
-    auto entry = As<ConfigMap>(item);
-    auto schema_property = entry ? entry->GetValue("schema") : nullptr;
-    if (!schema_property)
-      continue;
-    const string& schema_id = schema_property->str();
-    if (!seen_schemas.insert(schema_id).second)
-      continue;
-    const path schema_path = resolver->ResolvePath(schema_id);
-    if (schema_path.empty() || !fs::exists(schema_path)) {
+  for (const auto& schema_id : result->schema_ids) {
+    const path source = resolver->ResolvePath(schema_id);
+    if (source.empty() || !fs::exists(source)) {
       LOG(ERROR) << "missing input schema: " << schema_id;
-      ++failure;
       continue;
     }
     ConfigFileUpdate update(schema_id + ".schema.yaml", "schema/version");
-    if (!update.Run(deployer)) {
-      ++failure;
+    if (!update.Run(deployer))
+      continue;
+    const path compiled = compiled_resolver->ResolvePath(schema_id);
+    Config config;
+    string compiled_id;
+    if (!config.LoadFromFile(compiled) ||
+        !config.GetString("schema/schema_id", &compiled_id) ||
+        compiled_id != schema_id) {
+      LOG(ERROR) << "invalid compiled schema: " << schema_id;
       continue;
     }
-    the<Config> schema_config(schema_component->Create(schema_id));
-    if (!schema_config) {
-      ++failure;
-      continue;
-    }
-    const path compiled_schema = compiled_resolver->ResolvePath(schema_id);
-    if (!PrismConfig::ValidateReferences(schema_config.get()) ||
-        !plan.Collect(schema_id, schema_config.get(), compiled_schema))
+    if (!PrismConfig::ValidateReferences(&config) ||
+        !plan.Collect(schema_id, &config, compiled))
       return false;
-    active_schema_ids.push_back(schema_id);
+    prepared.push_back(schema_id);
   }
-  set<string> failed_schemas;
-  if (!plan.Run(&failed_schemas))
+  set<string> failed;
+  if (!plan.Run(&failed))
     return false;
-  for (const auto& schema_id : active_schema_ids) {
-    if (failed_schemas.count(schema_id))
-      ++failure;
-    else
-      ++success;
+  for (const auto& id : prepared) {
+    if (!failed.count(id))
+      result->successful_schemas.insert(id);
   }
+  LOG(INFO) << "finished updating schemas: "
+            << result->successful_schemas.size() << " success, "
+            << result->schema_ids.size() - result->successful_schemas.size()
+            << " failure.";
+  return result->successful_schemas.size() == result->schema_ids.size();
+}
 
-  LOG(INFO) << "finished updating schemas: " << success << " success, "
-            << failure << " failure.";
+bool WorkspaceUpdate::Run(Deployer* deployer) {
+  return deployer->RunSchemaDeployment(
+      [&](vector<string>* schema_ids) {
+        LoadModules(kDeployerModules);
+        LOG(INFO) << "updating workspace.";
+        if (!ConfigFileUpdate("default.yaml", "config_version").Run(deployer))
+          return false;
+        SymlinkingPrebuiltDictionaries().Run(deployer);
 
-  the<Config> user_config(Config::Require("user_config")->Create("user"));
-  // TODO: store as 64-bit number to avoid the year 2038 problem
-  user_config->SetInt("var/last_build_time", (int)time(NULL));
-
-  return failure == 0;
+        the<ResourceResolver> resolver(
+            Service::instance().CreateDeployedResourceResolver(
+                {"compiled_config", "", ".yaml"}));
+        Config config;
+        if (!config.LoadFromFile(resolver->ResolvePath("default"))) {
+          LOG(ERROR) << "Error loading default config.";
+          return false;
+        }
+        auto schema_list = config.GetList("schema_list");
+        if (!schema_list) {
+          LOG(WARNING) << "schema list not defined.";
+          return false;
+        }
+        set<string> seen;
+        for (const auto& item : *schema_list) {
+          auto entry = As<ConfigMap>(item);
+          auto schema = entry ? entry->GetValue("schema") : nullptr;
+          if (schema && seen.insert(schema->str()).second)
+            schema_ids->push_back(schema->str());
+        }
+        return true;
+      },
+      [&](DeploymentResult* result) {
+        if (!DeploySchemas(deployer, result))
+          return false;
+        the<Config> user_config(Config::Require("user_config")->Create("user"));
+        // TODO: store as 64-bit number to avoid the year 2038 problem
+        return user_config &&
+               user_config->SetInt("var/last_build_time", (int)time(NULL)) &&
+               user_config->Save();
+      });
 }
 
 SchemaUpdate::SchemaUpdate(TaskInitializer arg) : verbose_(false) {
@@ -275,7 +278,7 @@ static bool MaybeCreateDirectory(path dir) {
     return true;
   }
 
-  if (fs::exists(dir)) {
+  if (fs::is_directory(dir, ec)) {
     return true;
   }
   LOG(ERROR) << "error creating directory '" << dir << "'.";
@@ -333,37 +336,24 @@ static bool TrashDeprecatedUserCopy(const path& shared_copy,
 }
 
 bool SchemaUpdate::Run(Deployer* deployer) {
-  if (!fs::exists(source_path_)) {
-    LOG(ERROR) << "Error updating schema: nonexistent file '" << source_path_
-               << "'.";
-    return false;
-  }
-  string schema_id;
-  the<Config> config(new Config);
-  if (!config->LoadFromFile(source_path_) ||
-      !config->GetString("schema/schema_id", &schema_id) || schema_id.empty()) {
-    LOG(ERROR) << "invalid schema definition in '" << source_path_ << "'.";
-    return false;
-  }
-
-  the<DeploymentTask> config_file_update(
-      new ConfigFileUpdate(schema_id + ".schema.yaml", "schema/version"));
-  if (!config_file_update->Run(deployer)) {
-    return false;
-  }
-  the<ResourceResolver> resolver(
-      Service::instance().CreateDeployedResourceResolver(
-          {"compiled_schema", "", ".schema.yaml"}));
-  auto compiled_schema = resolver->ResolvePath(schema_id);
-  if (!MaybeCreateDirectory(deployer->staging_dir)) {
-    return false;
-  }
-  config.reset(Config::Require("schema")->Create(schema_id));
-  BuildPlan plan(deployer, verbose_, verbose_);
-  set<string> failed_schemas;
-  return PrismConfig::ValidateReferences(config.get()) &&
-         plan.Collect(schema_id, config.get(), compiled_schema) &&
-         plan.Run(&failed_schemas) && failed_schemas.empty();
+  return deployer->RunSchemaDeployment(
+      [&](vector<string>* schema_ids) {
+        LoadModules(kDeployerModules);
+        Config config;
+        string schema_id;
+        if (!config.LoadFromFile(source_path_) ||
+            !config.GetString("schema/schema_id", &schema_id) ||
+            schema_id.empty()) {
+          LOG(ERROR) << "invalid schema definition in '" << source_path_
+                     << "'.";
+          return false;
+        }
+        schema_ids->push_back(schema_id);
+        return true;
+      },
+      [&](DeploymentResult* result) {
+        return DeploySchemas(deployer, result, verbose_);
+      });
 }
 
 ConfigFileUpdate::ConfigFileUpdate(TaskInitializer arg) {
@@ -427,32 +417,50 @@ bool ConfigFileUpdate::Run(Deployer* deployer) {
                  << "' is moved to " << trash;
   }
   // build the config file if needs update
-  the<Config> config(Config::Require("config")->Create(file_name_));
-  if (ConfigNeedsUpdate(config.get())) {
-    if (!MaybeCreateDirectory(deployer->staging_dir)) {
-      return false;
-    }
-    config.reset(Config::Require("config_builder")->Create(file_name_));
-  }
-  return true;
+  the<ResourceResolver> resolver(
+      Service::instance().CreateDeployedResourceResolver(
+          {"compiled_config", "", ".yaml"}));
+  Config config;
+  const auto id = resolver->ToResourceId(file_name_);
+  const auto compiled = resolver->ResolvePath(id);
+  if (config.LoadFromFile(compiled) && !ConfigNeedsUpdate(&config))
+    return true;
+  if (!MaybeCreateDirectory(deployer->staging_dir))
+    return false;
+  the<Config> built(Config::Require("config_builder")->Create(file_name_));
+  return built && built->build_succeeded();
 }
 
 bool PrebuildAllSchemas::Run(Deployer* deployer) {
-  const path shared_data_path(deployer->shared_data_dir);
-  const path user_data_path(deployer->user_data_dir);
-  if (!fs::exists(shared_data_path) || !fs::is_directory(shared_data_path))
-    return false;
-  bool success = true;
-  for (fs::directory_iterator iter(shared_data_path), end; iter != end;
-       ++iter) {
-    path entry(iter->path());
-    if (boost::ends_with(entry.filename().to_utf8_string(), ".schema.yaml")) {
-      the<DeploymentTask> t(new SchemaUpdate(entry));
-      if (!t->Run(deployer))
-        success = false;
-    }
-  }
-  return success;
+  return deployer->RunSchemaDeployment(
+      [&](vector<string>* schema_ids) {
+        LoadModules(kDeployerModules);
+        const path shared_data_path(deployer->shared_data_dir);
+        if (!fs::is_directory(shared_data_path))
+          return false;
+        set<string> seen;
+        for (const auto& item : fs::directory_iterator(shared_data_path)) {
+          const path entry(item.path());
+          if (!boost::ends_with(entry.filename().to_utf8_string(),
+                                ".schema.yaml"))
+            continue;
+          Config config;
+          string schema_id;
+          if (!config.LoadFromFile(entry) ||
+              !config.GetString("schema/schema_id", &schema_id) ||
+              schema_id.empty()) {
+            LOG(ERROR) << "invalid schema definition in '" << entry << "'.";
+            return false;
+          }
+          if (seen.insert(schema_id).second)
+            schema_ids->push_back(schema_id);
+        }
+        std::sort(schema_ids->begin(), schema_ids->end());
+        return true;
+      },
+      [&](DeploymentResult* result) {
+        return DeploySchemas(deployer, result);
+      });
 }
 
 bool SymlinkingPrebuiltDictionaries::Run(Deployer* deployer) {

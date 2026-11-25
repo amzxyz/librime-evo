@@ -57,7 +57,7 @@ bool ConfigData::SaveToStream(std::ostream& stream) {
     LOG(ERROR) << "Error emitting YAML: " << e.what();
     return false;
   }
-  return true;
+  return stream.good();
 }
 
 bool ConfigData::LoadFromFile(const path& file_path, ConfigCompiler* compiler) {
@@ -92,7 +92,9 @@ bool ConfigData::SaveToFile(const path& file_path) {
   LOG(INFO) << "saving config file '" << file_path << "'.";
   // dump tree
   std::ofstream out(file_path.c_str());
-  return SaveToStream(out);
+  const bool success = SaveToStream(out);
+  out.close();
+  return success && bool(out);
 }
 
 bool ConfigData::IsListItemReference(const string& key) {

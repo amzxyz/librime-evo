@@ -133,10 +133,9 @@ bool CompileGraph::AddDependency(const string& prerequisite,
     LOG(WARNING) << "cannot order unknown compile unit '" << dependent << "'.";
     return false;
   }
-  // Declaration order wins. This keeps output ordering acyclic and matches the
-  // order in which schemas are listed.
-  if (prerequisite_it->second >= dependent_it->second) {
-    return true;
+  if (prerequisite_it == dependent_it) {
+    LOG(ERROR) << "self-dependency in compile unit '" << prerequisite << "'.";
+    return false;
   }
   auto& prerequisites = units_[dependent_it->second].prerequisites_;
   if (std::find(prerequisites.begin(), prerequisites.end(),
@@ -243,6 +242,29 @@ std::optional<CompileScheduler::Result> CompileScheduler::Run(
   }
 
   Result result{};
+  vector<bool> succeeded(count, false);
+  auto can_run = [&](size_t index) {
+    for (size_t prerequisite : graph.unit(index).prerequisites()) {
+      if (!succeeded[prerequisite])
+        return false;
+    }
+    return true;
+  };
+  auto skip_unit = [&](size_t index) {
+    const auto& id = graph.unit(index).id();
+    LOG(WARNING) << "skipping compile unit '" << id
+                 << "' because a prerequisite failed.";
+    result.skipped_units.push_back(id);
+  };
+  auto record_result = [&](size_t index, bool ok) {
+    succeeded[index] = ok;
+    if (ok) {
+      ++result.success;
+    } else {
+      ++result.failure;
+      result.failed_units.push_back(graph.unit(index).id());
+    }
+  };
 #ifdef RIME_NO_THREADING
   deque<size_t> ready;
   for (size_t i = 0; i < count; ++i) {
@@ -253,12 +275,10 @@ std::optional<CompileScheduler::Result> CompileScheduler::Run(
   while (!ready.empty()) {
     size_t i = ready.front();
     ready.pop_front();
-    if (RunUnit(graph.unit(i))) {
-      ++result.success;
-    } else {
-      ++result.failure;
-      result.failed_units.push_back(graph.unit(i).id());
-    }
+    const bool runnable = can_run(i);
+    if (!runnable)
+      skip_unit(i);
+    record_result(i, runnable && RunUnit(graph.unit(i)));
     for (size_t successor : successors[i]) {
       if (--indegree[successor] == 0) {
         ready.push_back(successor);
@@ -335,12 +355,7 @@ std::optional<CompileScheduler::Result> CompileScheduler::Run(
   size_t in_flight = 0;
   uint64_t in_flight_memory = 0;
   auto finish_unit = [&](size_t index, bool ok) {
-    if (ok) {
-      ++result.success;
-    } else {
-      ++result.failure;
-      result.failed_units.push_back(graph.unit(index).id());
-    }
+    record_result(index, ok);
     ++processed;
     for (size_t successor : successors[index]) {
       if (--indegree[successor] == 0) {
@@ -349,6 +364,20 @@ std::optional<CompileScheduler::Result> CompileScheduler::Run(
     }
   };
   while (processed < count) {
+    // Only the scheduler thread reads/writes prerequisite status. A skipped
+    // unit releases ordering edges but also propagates its dependency failure.
+    for (size_t i = 0; i < ready.size();) {
+      const size_t index = ready[i];
+      if (can_run(index)) {
+        ++i;
+      } else {
+        ready.erase(ready.begin() + i);
+        skip_unit(index);
+        finish_unit(index, false);
+      }
+    }
+    if (processed == count)
+      break;
     size_t inline_index = count;
     {
       std::lock_guard<std::mutex> lock(mutex);
