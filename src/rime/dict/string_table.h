@@ -29,6 +29,7 @@ class RIME_DLL StringTable {
 
   bool HasKey(const string& key);
   StringId Lookup(const string& key);
+  StringId LookupView(std::string_view key);
   void CommonPrefixMatch(const string& query, vector<StringId>* result);
   void Predict(const string& query, vector<StringId>* result);
   string GetString(StringId string_id);

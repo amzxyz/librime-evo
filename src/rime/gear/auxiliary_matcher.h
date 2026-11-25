@@ -5,6 +5,7 @@
 #ifndef RIME_AUXILIARY_MATCHER_H_
 #define RIME_AUXILIARY_MATCHER_H_
 
+#include <string_view>
 #include <rime/common.h>
 #include <rime/algo/syllabifier.h>
 
@@ -21,8 +22,10 @@ class AuxiliaryMatcher {
   void Lookup(const string& input, vector<AuxGraphMatch>* result);
   bool LookupAuxiliary(const string& text, vector<string>* result);
   bool Match(const string& text, const string& input);
+  bool MatchWord(const string& text, std::string_view code);
 
  private:
+  const vector<string>& CodesForCharacter(const string& text);
   bool MatchSequence(const vector<vector<string>>& codes,
                      size_t index,
                      const string& input,

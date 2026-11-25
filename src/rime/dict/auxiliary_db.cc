@@ -230,6 +230,11 @@ bool AuxiliaryDb::Save() {
   return ShrinkToFit();
 }
 
+bool AuxiliaryDb::HasCode(std::string_view code) const {
+  return !code.empty() && IsOpen() && code_keys_ &&
+         code_keys_->LookupView(code) != kInvalidStringId;
+}
+
 bool AuxiliaryDb::Lookup(const string& code,
                          vector<AuxiliaryCharacter>* result) const {
   if (!result || !code_keys_ || !code_values_ || !metadata_)

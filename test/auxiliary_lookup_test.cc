@@ -21,6 +21,7 @@
 #include <rime/dict/level_db.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/gear/auxiliary_matcher.h>
+#include <rime/gear/translator_commons.h>
 
 using namespace rime;
 
@@ -125,6 +126,7 @@ sort: by_weight
     std::filesystem::remove_all("aux_path_cache.userdb");
     std::filesystem::remove_all("aux_path_sentence.userdb");
     std::filesystem::remove_all("aux_path_prefix.userdb");
+    std::filesystem::remove_all("aux_path_word.userdb");
     for (const char* file :
          {"aux_path_test.dict.yaml", "aux_path_test_aux.yaml",
           "aux_path_test.schema.yaml", "aux_path_test.table.bin",
@@ -822,4 +824,109 @@ plain:
       EXPECT_EQ(string::npos, context->commit_history().repr().find("::z"));
     }
   }
+}
+
+TEST_F(RimeAuxiliaryLookupTest, WordAuxiliaryFollowsExactSuffixAndOption) {
+  std::ofstream("aux_path_test.dict.yaml", std::ios::app)
+      << "戊\tab\t1000\n"
+         "丁\tq\t100\n"
+         "戊乙\tab cd\t100000\n"
+         "甲乙丁\tab cd q\t100\n"
+         "甲乙乙乙乙\tab cd cd cd cd\t100\n";
+  std::ofstream("aux_path_test_aux.yaml", std::ios::app) << "甲\tqrst\n";
+  database_->Close();
+  const path schema_file{"aux_path_test.schema.yaml"};
+  ASSERT_TRUE(DictCompiler::CompileAuxiliary(schema_file));
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_file));
+  {
+    UserDbWrapper<LevelDb> db(path{"aux_path_word.userdb"}, "aux_path_word");
+    ASSERT_TRUE(db.Open());
+    ASSERT_TRUE(db.Update("ab cd \t甲戊", "1,1,1,0,0"));
+    ASSERT_TRUE(db.Close());
+  }
+  auto config = std::make_unique<Config>();
+  ASSERT_TRUE(config->LoadFromFile(schema_file));
+  std::istringstream settings(R"YAML(engine:
+  segmentors: [abc_segmentor, fallback_segmentor]
+  translators: [script_translator]
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz/
+translator:
+  dictionary: aux_path_test
+  prism: pinyin
+  user_dict: aux_path_word
+  user_dict_mode: auto
+  aux: aux_path_test
+  enable_direct_aux: true
+  direct_aux_option: syllable_aux
+  direct_word_aux_option: direct_word_aux
+)YAML");
+  Config input;
+  ASSERT_TRUE(input.LoadFromStream(settings));
+  for (const string key : {"engine", "speller", "translator"})
+    ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
+  the<Engine> engine(Engine::Create());
+  engine->ApplySchema(new Schema("word_aux_test", config.release()));
+  auto* context = engine->context();
+  auto find_full = [&](const string& text) -> an<Candidate> {
+    if (context->composition().empty())
+      return nullptr;
+    const auto menu = context->composition().back().menu;
+    if (!menu)
+      return nullptr;
+    const auto count = menu->Prepare(50);
+    for (size_t i = 0; i < count; ++i) {
+      auto candidate = menu->GetCandidateAt(i);
+      if (candidate && candidate->text() == text &&
+          candidate->end() == context->input().size())
+        return candidate;
+    }
+    return nullptr;
+  };
+
+  context->set_input("abcdq");
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("甲乙丁", context->GetSelectedCandidate()->text());
+  EXPECT_FALSE(find_full("甲乙"));
+  context->set_option("direct_word_aux", true);
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("甲乙丁", context->GetSelectedCandidate()->text());
+  EXPECT_TRUE(find_full("甲乙"));
+  auto user_phrase = find_full("甲戊");
+  ASSERT_TRUE(user_phrase);
+  EXPECT_EQ("user_phrase", user_phrase->type());
+  EXPECT_FALSE(find_full("戊乙"));
+  context->set_option("direct_word_aux", false);
+  EXPECT_FALSE(find_full("甲乙"));
+  context->set_option("syllable_aux", true);
+  context->set_input("abqcd");
+  EXPECT_TRUE(find_full("甲乙"));
+  context->set_option("direct_word_aux", true);
+  EXPECT_TRUE(find_full("甲乙"));
+  context->set_option("syllable_aux", false);
+
+  context->set_input("abq");
+  EXPECT_FALSE(find_full("甲"));
+  context->set_input("ababqrst");
+  EXPECT_FALSE(find_full("甲甲"));
+  context->set_input("abcdcdcdcdqrst");
+  EXPECT_TRUE(find_full("甲乙乙乙乙"));
+  context->set_input("abcdqrst/");
+  EXPECT_TRUE(find_full("甲乙"));
+
+  context->set_input("abcdqrst");
+  auto match = find_full("甲乙");
+  ASSERT_TRUE(match);
+  EXPECT_EQ("ab cd qrst", match->preedit());
+  auto phrase = As<Phrase>(Candidate::GetGenuineCandidate(match));
+  ASSERT_TRUE(phrase);
+  EXPECT_EQ((vector<size_t>{0, 2, 8}), phrase->spans().vertices());
+  ASSERT_TRUE(context->PushInput("u"));
+  EXPECT_FALSE(find_full("甲乙"));
+  EXPECT_TRUE(context->get_option("direct_word_aux"));
+  ASSERT_TRUE(context->PopInput());
+  EXPECT_TRUE(find_full("甲乙"));
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  ASSERT_TRUE(context->ConfirmCurrentSelection());
+  EXPECT_EQ(8u, context->composition().GetConfirmedPosition());
 }

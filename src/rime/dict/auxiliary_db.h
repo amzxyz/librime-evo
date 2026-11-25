@@ -36,6 +36,7 @@ class AuxiliaryDb : public MappedFile {
              uint32_t checksum);
   bool Save();
 
+  bool HasCode(std::string_view code) const;
   bool Lookup(const string& code, vector<AuxiliaryCharacter>* result) const;
   void CommonPrefixLookup(
       const string& input,

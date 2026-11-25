@@ -69,6 +69,7 @@ class ScriptTranslator : public Translator,
   string auxiliary_type_;
   bool enable_direct_aux_ = false;
   string direct_aux_option_;
+  string direct_word_aux_option_;
   the<Poet> poet_;
 
   bool LearnFromCommit(Context* ctx, Memory* writer) override;
@@ -78,6 +79,7 @@ class ScriptTranslator : public Translator,
   bool WritePhrase(Memory* writer, const DictEntry& entry, bool learn);
   bool DirectAuxiliaryEnabled() const;
   bool LoadAuxiliaryMatcher();
+  an<Translation> QueryDirectWordAuxiliary(const string& input, size_t start);
 };
 
 }  // namespace rime

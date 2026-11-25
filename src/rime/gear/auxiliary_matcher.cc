@@ -86,20 +86,43 @@ bool AuxiliaryMatcher::LookupAuxiliary(const string& text,
                                        vector<string>* result) {
   if (!result || text.empty())
     return false;
-  result->clear();
-  auto cached = auxiliary_cache_.find(text);
-  if (cached != auxiliary_cache_.end()) {
-    *result = cached->second;
-    return !result->empty();
-  }
+  *result = CodesForCharacter(text);
+  return !result->empty();
+}
+
+const vector<string>& AuxiliaryMatcher::CodesForCharacter(const string& text) {
+  auto found = auxiliary_cache_.find(text);
+  if (found != auxiliary_cache_.end())
+    return found->second;
+  static const vector<string> empty;
   if (!database_)
-    return false;
+    return empty;
   vector<AuxiliaryCode> codes;
   database_->ReverseLookup(text, &codes);
-  for (const auto& code : codes)
-    result->push_back(code.code);
-  auxiliary_cache_[text] = *result;
-  return !result->empty();
+  auto& result = auxiliary_cache_[text];
+  result.reserve(codes.size());
+  for (auto& code : codes)
+    result.push_back(std::move(code.code));
+  return result;
+}
+
+bool AuxiliaryMatcher::MatchWord(const string& text, std::string_view code) {
+  if (text.empty() || code.empty())
+    return false;
+  auto begin = text.begin();
+  auto end = begin;
+  utf8::next(end, text.end());
+  if (end == text.end())
+    return false;
+  for (;;) {
+    const auto& codes = CodesForCharacter(string(begin, end));
+    if (std::find(codes.begin(), codes.end(), code) != codes.end())
+      return true;
+    begin = end;
+    if (begin == text.end())
+      return false;
+    utf8::next(end, text.end());
+  }
 }
 
 bool AuxiliaryMatcher::MatchSequence(

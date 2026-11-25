@@ -22,8 +22,12 @@ bool StringTable::HasKey(const string& key) {
 }
 
 StringId StringTable::Lookup(const string& key) {
+  return LookupView(std::string_view(key.c_str()));
+}
+
+StringId StringTable::LookupView(std::string_view key) {
   marisa::Agent agent;
-  agent.set_query(key.c_str());
+  agent.set_query(key.data(), key.size());
   if (trie_.lookup(agent)) {
     return agent.key().id();
   } else {
