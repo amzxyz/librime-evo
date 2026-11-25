@@ -2,8 +2,8 @@
 // Copyright RIME Developers
 // Distributed under the BSD License
 //
-#ifndef RIME_REWRITE_BINARY_H_
-#define RIME_REWRITE_BINARY_H_
+#ifndef RIME_REWRITE_INTERNAL_H_
+#define RIME_REWRITE_INTERNAL_H_
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -194,4 +194,4 @@ inline bool InstallAtomically(const path& temporary_path,
 }  // namespace rewrite_internal
 }  // namespace rime
 
-#endif  // RIME_REWRITE_BINARY_H_
+#endif  // RIME_REWRITE_INTERNAL_H_

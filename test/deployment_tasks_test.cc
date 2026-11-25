@@ -4,6 +4,7 @@
 //
 
 #include <gtest/gtest.h>
+#include <rime/candidate.h>
 #include <rime/component.h>
 #include <rime/deployer.h>
 #include <rime/dict/prism.h>
@@ -253,13 +254,20 @@ TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {
     dictionary: workspace_prism
     prism: shared
     user_dict_mode: off
-  rewrite_test:
+  build/rewrites/rewrite_test:
     files: [rewrite.tsv]
+  rewrite_test:
+    data: rewrite_test
     option: true
     mode: replace
 )YAML";
   WorkspaceUpdate update;
   ASSERT_TRUE(update.Run(&deployer_));
+  const path output = deployer_.staging_dir / "rewrite_test.rewrite.bin";
+  ASSERT_TRUE(fs::exists(output));
+  const auto built = fs::last_write_time(output);
+  ASSERT_TRUE(update.Run(&deployer_));
+  EXPECT_EQ(built, fs::last_write_time(output));
 
   auto api = rime_get_api();
   auto session = api->create_session();
@@ -277,4 +285,47 @@ TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {
   ASSERT_TRUE(context->GetSelectedCandidate());
   EXPECT_EQ("你", context->GetSelectedCandidate()->text());
   api->destroy_session(session);
+}
+
+TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
+  WriteSecondSchema("ab");
+  std::ofstream(root_ / "default.custom.yaml") << R"YAML(patch:
+  schema_list:
+    - schema: workspace_prism_main
+    - schema: workspace_prism_sub
+)YAML";
+  std::ofstream(root_ / "rewrite.tsv") << "你\t妳\n";
+  std::ofstream(root_ / "other.tsv") << "你\t他\n";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/rewrites/shared:
+    files: [rewrite.tsv]
+  build/rewrites/alias:
+    files: [rewrite.tsv]
+)YAML";
+  const auto sub = root_ / "workspace_prism_sub.custom.yaml";
+  std::ofstream(sub) << R"YAML(patch:
+  build/rewrites/shared:
+    files: [rewrite.tsv]
+)YAML";
+  WorkspaceUpdate update;
+  ASSERT_TRUE(update.Run(&deployer_));
+  const path shared = deployer_.staging_dir / "shared.rewrite.bin";
+  const path alias = deployer_.staging_dir / "alias.rewrite.bin";
+  ASSERT_TRUE(fs::exists(shared));
+  ASSERT_TRUE(fs::exists(alias));
+  const auto built = fs::last_write_time(shared);
+  const auto alias_built = fs::last_write_time(alias);
+  ASSERT_TRUE(update.Run(&deployer_));
+  EXPECT_EQ(built, fs::last_write_time(shared));
+  EXPECT_EQ(alias_built, fs::last_write_time(alias));
+
+  const auto old_time = fs::last_write_time(sub);
+  std::ofstream(sub) << R"YAML(patch:
+  build/rewrites/shared:
+    files: [other.tsv]
+)YAML";
+  fs::last_write_time(sub, old_time + std::chrono::seconds(2));
+  EXPECT_FALSE(update.Run(&deployer_));
+  EXPECT_EQ(built, fs::last_write_time(shared));
+  EXPECT_EQ(alias_built, fs::last_write_time(alias));
 }

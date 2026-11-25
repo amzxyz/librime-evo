@@ -2,18 +2,15 @@
 // Copyright RIME Developers
 // Distributed under the BSD License
 //
-// The deployment compiler accepts either native files or a shared preset.
-// A preset expands to independent reusable stages. Stage order (including
-// duplicate stages) is stored in the schema/section binding; stages themselves
-// remain independently reusable and are never synthesized into a combined pack.
+// Each build/rewrites entry produces one independently named resource.
 #include <rime/lever/rewrite_compiler.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/predicate.hpp>
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -92,21 +89,8 @@ path ResolveDataFile(Deployer* deployer,
 
 void ReadStringList(Config* config, const string& key, vector<string>* values);
 
-struct RewriteSourceFile {
-  string declared_name;
-  path resolved_path;
-};
-
-struct RewriteSourceSection {
-  string name;
-  string key_xlit;
-  vector<RewriteSourceFile> files;
-};
-
-struct RewriteSourceBinding {
-  string name;
-  vector<RewriteSourceSection> stages;
-};
+using RewriteSourceSection = RewriteCompiler::Stage;
+using RewriteSourceBinding = RewriteCompiler::Spec;
 
 bool ResolveRewriteSources(Config* config,
                            Deployer* deployer,
@@ -119,7 +103,13 @@ bool ResolveRewriteSources(Config* config,
   bindings->clear();
   bindings->reserve(section_names.size());
   std::unique_ptr<RewritePresetCatalog> presets;
-  for (const auto& section_name : section_names) {
+  for (const auto& name : section_names) {
+    if (!safe_path::ValidRelativeName(name, false) ||
+        !config->GetMap("build/rewrites/" + name)) {
+      LOG(ERROR) << "invalid rewrite resource '" << name << "'.";
+      return false;
+    }
+    const string section_name = "build/rewrites/" + name;
     const bool has_files =
         static_cast<bool>(config->GetItem(section_name + "/files"));
     const bool has_preset =
@@ -131,7 +121,7 @@ bool ResolveRewriteSources(Config* config,
     }
 
     RewriteSourceBinding binding;
-    binding.name = section_name;
+    binding.name = name;
     if (has_files) {
       vector<string> files;
       ReadStringList(config, section_name + "/files", &files);
@@ -438,40 +428,6 @@ void ReadStringList(Config* config, const string& key, vector<string>* values) {
   }
 }
 
-vector<string> FindRewriterSections(Config* config) {
-  vector<string> result;
-  hash_set<string> seen;
-  auto filters = config->GetList("engine/filters");
-  if (!filters) {
-    return result;
-  }
-
-  for (auto it = filters->begin(); it != filters->end(); ++it) {
-    auto value = As<ConfigValue>(*it);
-    if (auto entry = As<ConfigMap>(*it)) {
-      value = entry->GetValue("name");
-    }
-    if (!value) {
-      continue;
-    }
-
-    const string& component = value->str();
-    string section;
-    if (component == "rewriter") {
-      section = "rewriter";
-    } else if (boost::starts_with(component, "rewriter@")) {
-      section = component.substr(sizeof("rewriter@") - 1);
-    } else {
-      continue;
-    }
-
-    if (!section.empty() && seen.insert(section).second) {
-      result.push_back(std::move(section));
-    }
-  }
-  return result;
-}
-
 bool CompileStage(const RewriteSourceSection& source,
                   RewriteStageData* output) {
   if (!output) {
@@ -519,142 +475,92 @@ bool CompileStage(const RewriteSourceSection& source,
 
 }  // namespace
 
-RewriteCompiler::RewriteCompiler(const string& schema_id,
-                                 Config* config,
-                                 Deployer* deployer)
-    : schema_id_(schema_id), config_(config), deployer_(deployer) {}
-
-bool RewriteCompiler::Compile() {
-  auto fail = [&]() {
-    if (deployer_) {
-      RewriteStoreWriter store(deployer_->staging_dir / "rewriter.rwp");
-      store.MarkWorkspaceFailed();
-    }
+bool RewriteCompiler::ReadSpecs(Config* config, vector<Spec>* specs) {
+  if (!config || !deployer_ || !specs)
     return false;
-  };
-
-  if (!config_ || !deployer_) {
-    return fail();
-  }
-
-  const path schema_id_path(schema_id_);
-  if (schema_id_.empty() || schema_id_path.is_absolute() ||
-      schema_id_path.has_parent_path() ||
-      schema_id_path.filename().string() != schema_id_) {
-    LOG(ERROR) << "cannot update shared rewrite store: schema id '"
-               << schema_id_
-               << "' is invalid; expected a single non-empty schema id "
-                  "without path components.";
-    return fail();
-  }
-
-  std::error_code ec;
-  fs::create_directories(deployer_->staging_dir, ec);
-  if (ec) {
-    LOG(ERROR) << "cannot create rewrite staging directory '"
-               << deployer_->staging_dir << "': " << ec.message()
-               << "; check directory permissions and available storage.";
-    return fail();
-  }
-
-  const path store_path = deployer_->staging_dir / "rewriter.rwp";
-  RewriteStoreWriter store(store_path);
-  if (!store.Open()) {
-    return fail();
-  }
-  if (store.WorkspaceFailed()) {
-    return false;
-  }
-
-  const vector<string> section_names = FindRewriterSections(config_);
-  if (section_names.empty()) {
-    if (!store.CommitSchema(schema_id_, {})) {
-      return fail();
-    }
+  specs->clear();
+  if (config->IsNull("build/rewrites"))
     return true;
+  auto rewrites = config->GetMap("build/rewrites");
+  if (!rewrites) {
+    LOG(ERROR) << "build/rewrites must be a map keyed by resource name.";
+    return false;
   }
-
-  vector<RewriteSourceBinding> sources;
-  if (!ResolveRewriteSources(config_, deployer_, section_names, &sources)) {
-    return fail();
-  }
-
-  struct CachedStage {
-    StageDescriptor descriptor;
-    RewriteStageId id;
-  };
-  vector<CachedStage> stage_cache;
-  vector<RewriteStageBinding> bindings;
-  bindings.reserve(sources.size());
-
-  for (const auto& source_binding : sources) {
-    RewriteStageBinding binding;
-    binding.name = source_binding.name;
-    binding.stages.reserve(source_binding.stages.size());
-
-    for (const auto& source : source_binding.stages) {
-      const StageDescriptor descriptor = DescribeStage(source);
-      RewriteStageId stage_id;
+  vector<string> names;
+  for (const auto& item : *rewrites)
+    names.push_back(item.first);
+  if (!ResolveRewriteSources(config, deployer_, names, specs))
+    return false;
+  for (auto& spec : *specs) {
+    uint64_t bytes = 0;
+    for (const auto& stage : spec.stages) {
+      const auto descriptor = DescribeStage(stage);
       const auto cached = std::find_if(
-          stage_cache.begin(), stage_cache.end(),
-          [&](const auto& item) { return item.descriptor == descriptor; });
-      if (cached != stage_cache.end()) {
-        stage_id = cached->id;
+          stage_cache_.begin(), stage_cache_.end(), [&](const auto& item) {
+            return item.key_xlit == descriptor.key_xlit &&
+                   item.files == descriptor.files;
+          });
+      RewriteStageId id;
+      if (cached != stage_cache_.end()) {
+        id = cached->id;
       } else {
-        if (!ComputeStageId(source, &stage_id)) {
-          return fail();
-        }
-        stage_cache.push_back({descriptor, stage_id});
-        if (!store.HasStage(stage_id)) {
-          RewriteStageData stage;
-          if (!CompileStage(source, &stage) ||
-              !store.AppendStage(stage_id, std::move(stage))) {
-            LOG(ERROR) << "failed to compile rewrite stage '" << source.name
-                       << "'.";
-            return fail();
-          }
-        }
+        if (!ComputeStageId(stage, &id))
+          return false;
+        stage_cache_.push_back({descriptor.key_xlit, descriptor.files, id});
       }
-      binding.stages.push_back(stage_id);
+      spec.ids.push_back(id);
+      for (const auto& file : descriptor.files) {
+        std::error_code ec;
+        const auto size = fs::file_size(file, ec);
+        if (ec)
+          return false;
+        constexpr uint64_t limit =
+            ((std::numeric_limits<uint64_t>::max)() - 1024 * 1024) / 16;
+        bytes += (std::min<uint64_t>)(size, limit - bytes);
+      }
     }
-    bindings.push_back(std::move(binding));
-  }
-
-  if (!store.CommitSchema(schema_id_, bindings)) {
-    LOG(ERROR) << "failed to commit rewrite index for schema '" << schema_id_
-               << "'.";
-    return fail();
+    spec.estimated_memory = bytes * 16 + 1024 * 1024;
   }
   return true;
 }
 
-bool RewriteCompiler::BeginWorkspace(Deployer* deployer) {
-  if (!deployer) {
+bool RewriteCompiler::Compile(const Spec& spec, Deployer* deployer) {
+  const bool rebuild = false;
+  if (!deployer || !safe_path::ValidRelativeName(spec.name, false) ||
+      spec.ids.size() != spec.stages.size())
     return false;
-  }
-  RewriteStoreWriter store(deployer->staging_dir / "rewriter.rwp");
-  return store.BeginWorkspace();
-}
-
-bool RewriteCompiler::AbortWorkspace(Deployer* deployer) {
-  if (!deployer) {
+  vector<path> targets;
+  auto add_target = [&](const string& name) {
+    if (!safe_path::ValidRelativeName(name, false))
+      return false;
+    const path target = safe_path::WritableFile(deployer->staging_dir,
+                                                RewriteStore::FileName(name));
+    if (target.empty())
+      return false;
+    targets.push_back(target);
+    return true;
+  };
+  if (!add_target(spec.name))
     return false;
+  for (const auto& alias : spec.aliases) {
+    if (!add_target(alias))
+      return false;
   }
-  RewriteStoreWriter store(deployer->staging_dir / "rewriter.rwp");
-  return store.AbortWorkspace();
-}
-
-bool RewriteCompiler::FinalizeWorkspace(const vector<string>& schema_ids,
-                                        Deployer* deployer) {
-  if (!deployer) {
+  auto load = [&](size_t i, RewriteStageData* data) {
+    return CompileStage(spec.stages[i], data);
+  };
+  const vector<path> reusable =
+      rebuild ? vector<path>()
+              : vector<path>(targets.begin() + 1, targets.end());
+  if (!RewriteStore::Build(targets.front(), spec.ids, load, rebuild, reusable))
     return false;
+  bool success = true;
+  for (size_t i = 1; i < targets.size(); ++i) {
+    if (!RewriteStore::Build(targets[i], spec.ids, load, rebuild,
+                             {targets.front()}))
+      success = false;
   }
-  const path store_path = deployer->staging_dir / "rewriter.rwp";
-  RewriteStoreWriter store(store_path);
-  if (!store.Open() || !store.RetainSchemas(schema_ids)) {
-    return false;
-  }
-  return store.CommitWorkspace();
+  return success;
 }
 
 }  // namespace rime

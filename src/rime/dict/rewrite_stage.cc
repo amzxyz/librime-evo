@@ -2,15 +2,13 @@
 // Copyright RIME Developers
 // Distributed under the BSD License
 //
-#include <rime/dict/rewrite_pack.h>
+#include <rime/dict/rewrite_stage.h>
 #include "rewrite_internal.h"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <exception>
-#include <filesystem>
-#include <fstream>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -26,30 +24,18 @@ namespace rime {
 namespace {
 
 using rewrite_internal::FitsU32;
-using rewrite_internal::FlushFileDurably;
 using rewrite_internal::InRange;
-using rewrite_internal::InstallAtomically;
-using rewrite_internal::MakeTemporaryPath;
 using rewrite_internal::ReadU32;
 using rewrite_internal::ReadU64;
-using rewrite_internal::TemporaryFileGuard;
 using rewrite_internal::WriteU32;
 using rewrite_internal::WriteU64;
 using rewrite_internal::WriteZeros;
 
-constexpr char kMagic[] = {'R', 'I', 'M', 'E', 'R', 'W', 'P', '1'};
-constexpr uint32_t kFormatVersion = 1;
-constexpr uint32_t kStageRecordOffset = 16;
-constexpr uint32_t kStageRecordSize = 72;
-constexpr uint32_t kHeaderSize = kStageRecordOffset + kStageRecordSize;
+// Serialized fields, not a native struct: u64 + 3 * u32.
+constexpr uint32_t kHeaderSize = 20;
 constexpr uint32_t kKeyIndexRecordSize = 8;
 constexpr uint32_t kStageFlagHasPreedit = 1U << 0;
-constexpr uint32_t kStageFeatureFlagsMask = 0xffU;
 constexpr uint32_t kKnownStageFeatureFlags = kStageFlagHasPreedit;
-
-// Bits above the feature byte were used by an experimental max-key-length
-// optimization. They are ignored on read for compatibility with those packs;
-// newly built stages leave them zero.
 
 constexpr uint32_t kUnicodeScalarLimit = 0x110000;
 constexpr uint32_t kCharPageShift = 8;
@@ -64,17 +50,10 @@ static_assert(kCharDirectoryEntries <= std::numeric_limits<uint16_t>::max());
 static_assert(sizeof(uint16_t) == 2 && sizeof(uint32_t) == 4);
 
 struct StageRecord {
-  uint64_t phrase_trie_offset = 0;
   uint64_t phrase_trie_size = 0;
-  uint64_t char_directory_offset = 0;
-  uint64_t char_pages_offset = 0;
-  uint64_t key_index_offset = 0;
-  uint64_t value_pool_offset = 0;
-  uint64_t value_pool_size = 0;
   uint32_t char_page_count = 0;
   uint32_t key_count = 0;
   uint32_t flags = 0;
-  uint32_t phrase_key_count = 0;
 };
 
 uint64_t Tell(std::ostream* out) {
@@ -82,40 +61,15 @@ uint64_t Tell(std::ostream* out) {
   return position < 0 ? 0 : static_cast<uint64_t>(position);
 }
 
-void Align(std::ostream* out, size_t alignment) {
-  const uint64_t position = Tell(out);
-  WriteZeros(
-      out, static_cast<size_t>((alignment - position % alignment) % alignment));
-}
-
 StageRecord ReadStageRecord(const char* p) {
-  StageRecord record;
-  record.phrase_trie_offset = ReadU64(p);
-  record.phrase_trie_size = ReadU64(p + 8);
-  record.char_directory_offset = ReadU64(p + 16);
-  record.char_pages_offset = ReadU64(p + 24);
-  record.key_index_offset = ReadU64(p + 32);
-  record.value_pool_offset = ReadU64(p + 40);
-  record.value_pool_size = ReadU64(p + 48);
-  record.char_page_count = ReadU32(p + 56);
-  record.key_count = ReadU32(p + 60);
-  record.flags = ReadU32(p + 64);
-  record.phrase_key_count = ReadU32(p + 68);
-  return record;
+  return {ReadU64(p), ReadU32(p + 8), ReadU32(p + 12), ReadU32(p + 16)};
 }
 
 void WriteStageRecord(std::ostream* out, const StageRecord& record) {
-  WriteU64(out, record.phrase_trie_offset);
   WriteU64(out, record.phrase_trie_size);
-  WriteU64(out, record.char_directory_offset);
-  WriteU64(out, record.char_pages_offset);
-  WriteU64(out, record.key_index_offset);
-  WriteU64(out, record.value_pool_offset);
-  WriteU64(out, record.value_pool_size);
   WriteU32(out, record.char_page_count);
   WriteU32(out, record.key_count);
   WriteU32(out, record.flags);
-  WriteU32(out, record.phrase_key_count);
 }
 
 uint32_t DartsUnitLabel(uint32_t unit) {
@@ -132,10 +86,6 @@ bool DartsUnitHasLeaf(uint32_t unit) {
 
 uint32_t DartsUnitValue(uint32_t unit) {
   return unit & ((1U << 31) - 1);
-}
-
-uint32_t StageFeatureFlags(uint32_t flags) {
-  return flags & kStageFeatureFlagsMask;
 }
 
 bool ValidatePhraseTrieBounds(const char* data, uint64_t size) {
@@ -160,37 +110,6 @@ bool ValidatePhraseTrieBounds(const char* data, uint64_t size) {
     }
   }
   return true;
-}
-
-bool ValidateStageRecord(const StageRecord& record, uint64_t file_size) {
-  const uint64_t char_directory_size =
-      static_cast<uint64_t>(kCharDirectoryEntries) * sizeof(uint16_t);
-  const uint64_t char_pages_size =
-      static_cast<uint64_t>(record.char_page_count) * kCharPageSize *
-      sizeof(uint32_t);
-  const bool has_phrase_trie = record.phrase_key_count != 0;
-  return record.key_count != 0 && record.key_count <= kDispatchKeyMask &&
-         record.char_page_count != 0 &&
-         record.char_page_count <= kCharDirectoryEntries &&
-         record.value_pool_size != 0 &&
-         (StageFeatureFlags(record.flags) & ~kKnownStageFeatureFlags) == 0 &&
-         record.char_directory_offset >= kHeaderSize &&
-         (record.char_directory_offset % alignof(uint16_t)) == 0 &&
-         (record.char_pages_offset % alignof(uint32_t)) == 0 &&
-         InRange(record.char_directory_offset, char_directory_size,
-                 file_size) &&
-         InRange(record.char_pages_offset, char_pages_size, file_size) &&
-         InRange(record.key_index_offset,
-                 static_cast<uint64_t>(record.key_count) * kKeyIndexRecordSize,
-                 file_size) &&
-         InRange(record.value_pool_offset, record.value_pool_size, file_size) &&
-         ((!has_phrase_trie && record.phrase_trie_offset == 0 &&
-           record.phrase_trie_size == 0) ||
-          (has_phrase_trie && record.phrase_trie_size != 0 &&
-           (record.phrase_trie_offset % alignof(uint32_t)) == 0 &&
-           (record.phrase_trie_size % sizeof(uint32_t)) == 0 &&
-           InRange(record.phrase_trie_offset, record.phrase_trie_size,
-                   file_size)));
 }
 
 size_t DecodeUtf8Scalar(const char* begin,
@@ -343,62 +262,51 @@ inline bool ReadVarUint32(const char* begin,
   return false;
 }
 
-class RewriteStageStorage {
+class RewriteMapping {
  public:
-  RewriteStageStorage() = default;
-  ~RewriteStageStorage() { Close(); }
+  RewriteMapping() = default;
+  ~RewriteMapping() { Close(); }
 
-  bool Open(const path& file_path, uint64_t offset, uint64_t size) {
+  bool Open(const path& file_path, uint64_t* size) {
     Close();
-    if (size == 0 || size > std::numeric_limits<size_t>::max()) {
-      return false;
-    }
 #ifdef _WIN32
     HANDLE file =
         CreateFileW(file_path.wstring().c_str(), GENERIC_READ,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (file == INVALID_HANDLE_VALUE) {
+    if (file == INVALID_HANDLE_VALUE)
       return false;
-    }
-    SYSTEM_INFO system_info{};
-    GetSystemInfo(&system_info);
-    const uint64_t granularity = system_info.dwAllocationGranularity;
-    const uint64_t aligned_offset = offset / granularity * granularity;
-    const uint64_t delta = offset - aligned_offset;
-    if (delta > std::numeric_limits<size_t>::max() ||
-        size > std::numeric_limits<size_t>::max() - delta) {
+    LARGE_INTEGER length{};
+    if (!GetFileSizeEx(file, &length) || length.QuadPart <= 0 ||
+        static_cast<uint64_t>(length.QuadPart) >
+            std::numeric_limits<size_t>::max()) {
       CloseHandle(file);
       return false;
     }
-    const size_t mapping_size = static_cast<size_t>(delta + size);
     HANDLE mapping =
         CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
     if (!mapping) {
       CloseHandle(file);
       return false;
     }
-    void* base = MapViewOfFile(
-        mapping, FILE_MAP_READ, static_cast<DWORD>(aligned_offset >> 32),
-        static_cast<DWORD>(aligned_offset & 0xffffffff), mapping_size);
+    void* base = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
     CloseHandle(mapping);
     CloseHandle(file);
-    if (!base) {
+    if (!base)
       return false;
-    }
     mapped_base_ = base;
-    mapped_size_ = mapping_size;
-    data_ = static_cast<const char*>(base) + delta;
+    mapped_size_ = static_cast<size_t>(length.QuadPart);
+    data_ = static_cast<const char*>(base);
+    *size = mapped_size_;
     return true;
 #else
     try {
       mapping_ = std::make_unique<boost::interprocess::file_mapping>(
           file_path.c_str(), boost::interprocess::read_only);
       region_ = std::make_unique<boost::interprocess::mapped_region>(
-          *mapping_, boost::interprocess::read_only,
-          static_cast<boost::interprocess::offset_t>(offset),
-          static_cast<size_t>(size));
-      return region_ && region_->get_address() && region_->get_size() == size;
+          *mapping_, boost::interprocess::read_only);
+      *size = region_->get_size();
+      return region_->get_address() && *size != 0;
     } catch (const std::exception&) {
       mapping_.reset();
       region_.reset();
@@ -449,7 +357,7 @@ struct StageView {
   const char* value_pool_end = nullptr;
   uint32_t char_page_count = 0;
   uint32_t key_count = 0;
-  uint32_t phrase_key_count = 0;
+  bool has_phrase_trie = false;
   uint32_t flags = 0;
   vector<uint32_t> phrase_nodes;
 
@@ -497,7 +405,7 @@ struct StageView {
 
   bool BuildPhraseNodeCache() {
     phrase_nodes.clear();
-    if (phrase_key_count == 0) {
+    if (!has_phrase_trie) {
       return true;
     }
     if (!char_directory || !char_pages) {
@@ -576,7 +484,7 @@ struct StageView {
       size_t consumed_suffix_bytes,
       const Darts::DoubleArray::result_pair_type& prior_longest,
       PhraseProbe* probe) const {
-    if (!suffix || !end || !probe || suffix > end || phrase_key_count == 0) {
+    if (!suffix || !end || !probe || suffix > end || !has_phrase_trie) {
       return false;
     }
 
@@ -716,7 +624,7 @@ struct StageView {
       return *key_id < key_count;
     }
 
-    if ((dispatch & kDispatchPhraseStarter) == 0 || phrase_key_count == 0) {
+    if ((dispatch & kDispatchPhraseStarter) == 0 || !has_phrase_trie) {
       return false;
     }
 
@@ -840,7 +748,7 @@ struct StageView {
       size_t key_id = kInvalidIndex;
       size_t match_size = 0;
 
-      if ((dispatch & kDispatchPhraseStarter) != 0 && phrase_key_count != 0) {
+      if ((dispatch & kDispatchPhraseStarter) != 0 && has_phrase_trie) {
         size_t node_pos = 0;
         PhraseProbe probe;
         if (PhraseNode(dispatch_slot, &node_pos) &&
@@ -1022,7 +930,7 @@ struct StageView {
       size_t key_id = kInvalidIndex;
       size_t match_size = 0;
 
-      if ((dispatch & kDispatchPhraseStarter) != 0 && phrase_key_count != 0) {
+      if ((dispatch & kDispatchPhraseStarter) != 0 && has_phrase_trie) {
         PhraseProbe probe;
         bool used_continuation = false;
 
@@ -1238,11 +1146,8 @@ bool WriteDispatchAndTrie(std::ostream* out,
   if (char_pages.empty()) {
     return false;
   }
-  Align(out, alignof(uint32_t));
-  record->char_directory_offset = Tell(out);
   out->write(reinterpret_cast<const char*>(char_directory.data()),
              static_cast<std::streamsize>(sizeof(char_directory)));
-  record->char_pages_offset = Tell(out);
   for (const auto& page : char_pages) {
     out->write(reinterpret_cast<const char*>(page.data()),
                static_cast<std::streamsize>(sizeof(page)));
@@ -1261,7 +1166,6 @@ bool WriteDispatchAndTrie(std::ostream* out,
         });
   };
   std::sort(phrase_ids.begin(), phrase_ids.end(), byte_less);
-  record->phrase_key_count = static_cast<uint32_t>(phrase_ids.size());
   if (phrase_ids.empty()) {
     return true;
   }
@@ -1292,8 +1196,6 @@ bool WriteDispatchAndTrie(std::ostream* out,
     return false;
   }
 
-  Align(out, alignof(uint32_t));
-  record->phrase_trie_offset = Tell(out);
   record->phrase_trie_size = trie.total_size();
   out->write(reinterpret_cast<const char*>(trie.array()),
              static_cast<std::streamsize>(trie.total_size()));
@@ -1304,7 +1206,6 @@ bool WriteValues(std::ostream* out,
                  const vector<Bucket>& buckets,
                  bool has_preedit,
                  StageRecord* record) {
-  record->key_index_offset = Tell(out);
   record->key_count = static_cast<uint32_t>(buckets.size());
   uint64_t value_pool_size = 0;
 
@@ -1333,8 +1234,7 @@ bool WriteValues(std::ostream* out,
     }
   }
 
-  record->value_pool_offset = Tell(out);
-  record->value_pool_size = value_pool_size;
+  const uint64_t value_pool_offset = Tell(out);
   for (const auto& bucket : buckets) {
     for (const auto& item : bucket.values) {
       if (has_preedit) {
@@ -1345,146 +1245,146 @@ bool WriteValues(std::ostream* out,
       out->write(item.value.data(), item.value.size());
     }
   }
-  return *out && Tell(out) == record->value_pool_offset + value_pool_size;
+  return *out && Tell(out) == value_pool_offset + value_pool_size;
 }
 
-bool BuildRewritePack(const path& output_path, const RewriteStageData& stage) {
-  if (stage.entries.empty()) {
+bool BuildRewriteStage(std::ostream* out, const RewriteStageData& stage) {
+  if (!out || !*out || stage.entries.empty())
     return false;
-  }
-  std::error_code ec;
-  const path parent = output_path.parent_path();
-  if (!parent.empty()) {
-    std::filesystem::create_directories(parent, ec);
-    if (ec) {
-      return false;
-    }
-  }
-
-  const path temporary_path = MakeTemporaryPath(output_path);
-  TemporaryFileGuard temporary_file(temporary_path);
-  std::ofstream out(static_cast<const std::filesystem::path&>(temporary_path),
-                    std::ios::binary | std::ios::trunc);
-  if (!out) {
+  const auto start = out->tellp();
+  if (start < 0 || static_cast<uint64_t>(start) % alignof(uint32_t))
     return false;
-  }
 
-  out.write(kMagic, sizeof(kMagic));
-  WriteU32(&out, kFormatVersion);
-  WriteU32(&out, kHeaderSize);
-  WriteZeros(&out, kStageRecordSize);
-
+  WriteZeros(out, kHeaderSize);
   StageRecord record;
   const bool has_preedit =
       std::any_of(stage.entries.begin(), stage.entries.end(),
                   [](const auto& entry) { return !entry.preedit.empty(); });
-  if (has_preedit) {
+  if (has_preedit)
     record.flags |= kStageFlagHasPreedit;
-  }
 
   vector<Bucket> buckets;
   if (!BuildBuckets(stage, &buckets) ||
-      !WriteDispatchAndTrie(&out, buckets, &record) ||
-      !WriteValues(&out, buckets, has_preedit, &record)) {
+      !WriteDispatchAndTrie(out, buckets, &record) ||
+      !WriteValues(out, buckets, has_preedit, &record))
     return false;
-  }
 
-  const uint64_t end = Tell(&out);
-  out.seekp(kStageRecordOffset);
-  WriteStageRecord(&out, record);
-  out.seekp(static_cast<std::streamoff>(end));
-  out.close();
-  if (!out || !FlushFileDurably(temporary_path) ||
-      !InstallAtomically(temporary_path, output_path, &ec)) {
+  const auto end = out->tellp();
+  if (end < start)
     return false;
-  }
-  temporary_file.Commit();
-  return true;
+  out->seekp(start);
+  WriteStageRecord(out, record);
+  out->seekp(end);
+  return static_cast<bool>(*out);
 }
 
 }  // namespace
 
-class RewritePack::Impl {
+class RewriteStage::Impl {
  public:
-  std::unique_ptr<RewriteStageStorage> storage;
   StageView stage;
 };
 
-RewritePack::RewritePack(const path& file_path, uint64_t offset, uint64_t size)
-    : file_path_(file_path), offset_(offset), size_(size), impl_(new Impl) {}
+RewriteStage::RewriteStage(an<const char> mapping,
+                           uint64_t offset,
+                           uint64_t size)
+    : mapping_(std::move(mapping)),
+      offset_(offset),
+      size_(size),
+      impl_(new Impl) {}
 
-RewritePack::~RewritePack() = default;
+RewriteStage::~RewriteStage() = default;
 
-bool RewritePack::Open() {
-  impl_->storage = std::make_unique<RewriteStageStorage>();
-  if (!impl_->storage->Open(file_path_, offset_, size_)) {
+an<const char> RewriteStage::MapFile(const path& file_path, uint64_t* size) {
+  *size = 0;
+  auto storage = New<RewriteMapping>();
+  if (!storage->Open(file_path, size))
+    return nullptr;
+  return an<const char>(storage, storage->data());
+}
+
+bool RewriteStage::Open() {
+  if (!mapping_ || size_ < kHeaderSize || offset_ % alignof(uint32_t))
     return false;
-  }
-
-  const char* base = impl_->storage->data();
-  if (!base || size_ < kHeaderSize ||
-      std::memcmp(base, kMagic, sizeof(kMagic)) != 0 ||
-      ReadU32(base + 8) != kFormatVersion ||
-      ReadU32(base + 12) != kHeaderSize) {
+  const char* base = mapping_.get() + offset_;
+  const StageRecord record = ReadStageRecord(base);
+  if (!record.key_count || record.key_count > kDispatchKeyMask ||
+      !record.char_page_count ||
+      record.char_page_count > kCharDirectoryEntries ||
+      (record.flags & ~kKnownStageFeatureFlags) != 0 ||
+      record.phrase_trie_size % sizeof(uint32_t))
     return false;
-  }
 
-  const StageRecord record = ReadStageRecord(base + kStageRecordOffset);
-  if (!ValidateStageRecord(record, size_)) {
+  // The stage layout is fixed. Check each section before advancing, so
+  // even a corrupt length cannot overflow the offset or escape the stage.
+  const uint64_t directory_size =
+      uint64_t{kCharDirectoryEntries} * sizeof(uint16_t);
+  const uint64_t pages_size =
+      uint64_t{record.char_page_count} * kCharPageSize * sizeof(uint32_t);
+  const uint64_t index_size = uint64_t{record.key_count} * kKeyIndexRecordSize;
+  uint64_t cursor = kHeaderSize;
+  auto take = [&](uint64_t length) -> const char* {
+    if (!InRange(cursor, length, size_))
+      return nullptr;
+    const char* section = base + cursor;
+    cursor += length;
+    return section;
+  };
+  const char* directory = take(directory_size);
+  const char* pages = take(pages_size);
+  const char* trie = take(record.phrase_trie_size);
+  const char* index = take(index_size);
+  if (!directory || !pages || !trie || !index || cursor >= size_ ||
+      size_ - cursor > std::numeric_limits<uint32_t>::max())
     return false;
-  }
 
   StageView& stage = impl_->stage;
-  stage.char_directory =
-      reinterpret_cast<const uint16_t*>(base + record.char_directory_offset);
-  stage.char_pages =
-      reinterpret_cast<const uint32_t*>(base + record.char_pages_offset);
+  stage.char_directory = reinterpret_cast<const uint16_t*>(directory);
+  stage.char_pages = reinterpret_cast<const uint32_t*>(pages);
   stage.char_page_count = record.char_page_count;
-  stage.key_index = base + record.key_index_offset;
-  stage.value_pool = base + record.value_pool_offset;
-  stage.value_pool_end = stage.value_pool + record.value_pool_size;
+  stage.key_index = index;
+  stage.value_pool = base + cursor;
+  stage.value_pool_end = base + size_;
   stage.key_count = record.key_count;
-  stage.phrase_key_count = record.phrase_key_count;
-  stage.flags = StageFeatureFlags(record.flags);
+  stage.flags = record.flags;
+  stage.has_phrase_trie = record.phrase_trie_size != 0;
 
-  if (record.phrase_key_count != 0) {
-    const char* phrase_trie = base + record.phrase_trie_offset;
-    if (!ValidatePhraseTrieBounds(phrase_trie, record.phrase_trie_size)) {
+  if (stage.has_phrase_trie) {
+    if (!ValidatePhraseTrieBounds(trie, record.phrase_trie_size))
       return false;
-    }
     stage.phrase_trie.set_array(
-        phrase_trie, static_cast<size_t>(record.phrase_trie_size /
-                                         stage.phrase_trie.unit_size()));
-    if (!stage.BuildPhraseNodeCache()) {
+        trie, static_cast<size_t>(record.phrase_trie_size /
+                                  stage.phrase_trie.unit_size()));
+    if (!stage.BuildPhraseNodeCache())
       return false;
-    }
   }
   return true;
 }
 
-bool RewritePack::Lookup(std::string_view text, vector<string>* values) const {
+bool RewriteStage::Lookup(std::string_view text, vector<string>* values) const {
   return impl_->stage.Lookup(text, values);
 }
 
-bool RewritePack::LookupWithPreedit(std::string_view text,
-                                    vector<RewriteResult>* values) const {
+bool RewriteStage::LookupWithPreedit(std::string_view text,
+                                     vector<RewriteResult>* values) const {
   return impl_->stage.LookupWithPreedit(text, values);
 }
 
-bool RewritePack::ConvertSentence(std::string_view text, string* result) const {
+bool RewriteStage::ConvertSentence(std::string_view text,
+                                   string* result) const {
   return result && impl_->stage.ConvertSentence(text, result);
 }
 
-bool RewritePack::ConvertSentenceIncremental(
+bool RewriteStage::ConvertSentenceIncremental(
     std::string_view text,
     RewriteSentenceState* state,
     RewriteSentenceMetrics* metrics) const {
   return state && impl_->stage.ConvertSentenceIncremental(text, state, metrics);
 }
 
-bool RewritePackBuilder::Build(const path& output_path,
-                               const RewriteStageData& stage) const {
-  return BuildRewritePack(output_path, stage);
+bool RewriteStageBuilder::Build(std::ostream* out,
+                                const RewriteStageData& stage) const {
+  return BuildRewriteStage(out, stage);
 }
 
 }  // namespace rime
