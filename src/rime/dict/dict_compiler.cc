@@ -894,7 +894,7 @@ bool DictCompiler::ReadAuxiliarySpecs(
   return true;
 }
 
-bool DictCompiler::CompileAuxiliary(const path& schema_file) {
+bool DictCompiler::CompileAuxiliary(const path& schema_file, bool rebuild) {
   if (schema_file.empty())
     return true;
   Config schema;
@@ -913,12 +913,13 @@ bool DictCompiler::CompileAuxiliary(const path& schema_file) {
         << "build/auxiliary/dictionary is required for auxiliary algebra";
     return false;
   }
-  return CompileAuxiliary(source_name, groups);
+  return CompileAuxiliary(source_name, groups, rebuild);
 }
 
 bool DictCompiler::CompileAuxiliary(
     string source_name,
-    const vector<pair<string, an<ConfigList>>>& groups) {
+    const vector<pair<string, an<ConfigList>>>& groups,
+    bool rebuild) {
   if (groups.empty())
     return true;
   if (source_name.empty())
@@ -952,7 +953,7 @@ bool DictCompiler::CompileAuxiliary(
     }
     const auto target = target_resolver->ResolvePath(group.first);
     AuxiliaryDb database(target);
-    if (database.Exists() && database.Load()) {
+    if (!rebuild && database.Exists() && database.Load()) {
       const bool current = database.checksum() == checksum.checksum();
       database.Close();
       if (current)

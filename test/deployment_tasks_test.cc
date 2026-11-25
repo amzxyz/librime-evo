@@ -499,6 +499,38 @@ TEST(RimeBuildPlanTest, ResourceAliasesResolveToOneUnit) {
   EXPECT_EQ(2, runs);
 }
 
+TEST_F(RimeWorkspacePrismTest, ForcedCompilationRebuildsAuxiliaryGroups) {
+  std::ofstream(root_ / "aux.yaml") << "你\trx\n";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/auxiliary:
+    dictionary: aux
+    algebra:
+      direct: ["aux|^([a-z]+)$|$1|"]
+      suffix: ["aux|^([a-z]+)$|$1/|"]
+)YAML";
+  ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
+  const path direct = deployer_.staging_dir / "direct.aux.bin";
+  const path suffix = deployer_.staging_dir / "suffix.aux.bin";
+  ASSERT_TRUE(fs::exists(direct));
+  ASSERT_TRUE(fs::exists(suffix));
+
+  const auto past = fs::last_write_time(direct) - std::chrono::hours(24);
+  fs::last_write_time(direct, past);
+  fs::last_write_time(suffix, past);
+  const auto direct_time = fs::last_write_time(direct);
+  const auto suffix_time = fs::last_write_time(suffix);
+
+  ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
+  EXPECT_EQ(direct_time, fs::last_write_time(direct));
+  EXPECT_EQ(suffix_time, fs::last_write_time(suffix));
+
+  SchemaUpdate update(path(root_ / "workspace_prism_main.schema.yaml"));
+  update.set_verbose(true);
+  ASSERT_TRUE(update.Run(&deployer_));
+  EXPECT_GT(fs::last_write_time(direct), direct_time);
+  EXPECT_GT(fs::last_write_time(suffix), suffix_time);
+}
+
 TEST_F(RimeWorkspacePrismTest, RejectsConflictingAuxiliaryGroups) {
   WriteSecondSchema("ab");
   std::ofstream(root_ / "default.custom.yaml") << R"YAML(patch:
