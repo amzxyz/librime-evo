@@ -35,6 +35,9 @@ class ScriptTranslator : public Translator,
 
   virtual an<Translation> Query(const string& input,
                                 const Segment& segment) override;
+  void GetCodeChoices(const string& input,
+                      const Segment& segment,
+                      vector<CodeChoice>* result) override;
   bool SupportsAuxiliarySuffix() const override {
     return !auxiliary_type_.empty();
   }

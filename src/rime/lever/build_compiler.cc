@@ -47,8 +47,8 @@ bool BuildPlan::Collect(const string& schema_id,
       }
       the<BuildCompiler> compiler(component->Create(deployer_));
       if (!compiler) {
-        LOG(ERROR) << "schema '" << schema_id
-                   << "': cannot create compiler '" << key << "'.";
+        LOG(ERROR) << "schema '" << schema_id << "': cannot create compiler '"
+                   << key << "'.";
         valid_ = false;
         return false;
       }

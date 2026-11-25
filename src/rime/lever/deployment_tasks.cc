@@ -453,7 +453,8 @@ bool ConfigFileUpdate::Run(Deployer* deployer) {
   }
   auto* builder = Config::Require("config_builder");
   if (!builder) {
-    LOG(ERROR) << "config_builder is not registered for '" << file_name_ << "'.";
+    LOG(ERROR) << "config_builder is not registered for '" << file_name_
+               << "'.";
     return false;
   }
   the<Config> built(builder->Create(file_name_));

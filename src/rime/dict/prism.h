@@ -50,6 +50,27 @@ struct Metadata {
   // v6.0: shared code namespace and automatic supplement association.
   List<String> syllabary;
   uint32_t has_packs;
+  // v7.0: dense spelling offsets followed by shared choice records.
+  List<uint32_t> code_choices;
+  List<char> code_choice_strings;
+};
+
+// Borrowed view of a compiled choice list, valid while its Prism is mapped.
+class CodeChoiceView {
+ public:
+  CodeChoiceView() = default;
+  CodeChoiceView(const uint32_t* offsets, const char* strings, size_t size)
+      : offsets_(offsets), strings_(strings), size_(size) {}
+  size_t size() const { return size_; }
+  bool empty() const { return size_ == 0; }
+  std::string_view operator[](size_t i) const {
+    return strings_ + offsets_[i];
+  }
+
+ private:
+  const uint32_t* offsets_ = nullptr;
+  const char* strings_ = nullptr;
+  size_t size_ = 0;
 };
 
 }  // namespace prism
@@ -90,9 +111,14 @@ class Prism : public MappedFile {
   RIME_DLL void ExpandSearch(std::string_view key,
                              vector<Match>* result,
                              size_t limit);
+  // Strict refinements of compiled spelling sets; no keyboard configuration.
+  RIME_DLL bool HasCodeChoices() const;
+  RIME_DLL prism::CodeChoiceView QueryCodeChoices(int spelling_id) const;
+  RIME_DLL prism::CodeChoiceView QueryCodeChoices(std::string_view key) const;
   SpellingAccessor QuerySpelling(SyllableId spelling_id);
 
   bool has_syllabary() const { return format_ >= 6.0; }
+  bool has_code_choice_format() const { return format_ >= 7.0; }
   bool has_packs() const {
     return has_syllabary() && metadata_ && metadata_->has_packs;
   }

@@ -5,6 +5,7 @@
 // 2011-05-17 Zou xu <zouivex@gmail.com>
 //
 #include <algorithm>
+#include <fstream>
 #include <string_view>
 #include <gtest/gtest.h>
 #include <rime/dict/prism.h>
@@ -125,4 +126,79 @@ TEST_F(RimePrismTest, ExpandSearchWithLength) {
   EXPECT_EQ(result[1].length, 6);
   EXPECT_EQ(result[2].value, 3);
   EXPECT_EQ(result[2].length, 7);
+}
+
+static vector<string> ReadChoices(prism::CodeChoiceView choices) {
+  vector<string> result;
+  for (size_t i = 0; i < choices.size(); ++i)
+    result.emplace_back(choices[i]);
+  return result;
+}
+
+TEST_F(RimePrismTest, CodeChoicesUseCompiledSyllableSubsets) {
+  Prism prism(path{"code_choices_test.prism.bin"});
+  prism.Remove();
+  const Syllabary syllables{"x1", "x2", "y1", "z1", "z2", "outside"};
+  Script script;
+  script["986"] = {Spelling("x1"), Spelling("x2"), Spelling("y1"),
+                   Spelling("z1"), Spelling("z2")};
+  script["alias"] = script["986"];
+  script["xun"] = {Spelling("x1"), Spelling("x2")};
+  script["xvn"] = script["xun"];
+  script["Y"] = {Spelling("y1")};
+  script["zuo"] = {Spelling("z1"), Spelling("z2")};
+  script["zun"] = {Spelling("z1"), Spelling("outside")};
+  script["xung"] = script["xun"];
+  script["abbr"] = {Spelling("x1")};
+  script["abbr"].front().properties.type = kAbbreviation;
+  ASSERT_TRUE(prism.Build(syllables, &script));
+  const vector<string> expected{"Y", "xun", "zuo"};
+  EXPECT_EQ(expected, ReadChoices(prism.QueryCodeChoices("986")));
+  ASSERT_TRUE(prism.Save());
+  ASSERT_TRUE(prism.Load());
+  EXPECT_TRUE(prism.has_code_choice_format());
+  EXPECT_TRUE(prism.HasCodeChoices());
+  EXPECT_EQ(expected, ReadChoices(prism.QueryCodeChoices("986")));
+  EXPECT_EQ(expected, ReadChoices(prism.QueryCodeChoices("alias")));
+  EXPECT_TRUE(prism.QueryCodeChoices("xun").empty());
+  EXPECT_TRUE(prism.QueryCodeChoices("9864").empty());
+  EXPECT_TRUE(prism.QueryCodeChoices(-1).empty());
+  int id = -1;
+  ASSERT_TRUE(prism.GetValue("986", &id));
+  EXPECT_EQ(expected, ReadChoices(prism.QueryCodeChoices(id)));
+  ASSERT_TRUE(prism.GetValue("zuo", &id));
+  EXPECT_TRUE(prism.QueryCodeChoices(id).empty());
+
+  // Legacy format is readable but must be rebuilt by the compiler.
+  prism.Close();
+  {
+    std::fstream file(prism.file_path().c_str(),
+                      std::ios::in | std::ios::out | std::ios::binary);
+    ASSERT_TRUE(file);
+    file.write("Rime::Prism/6.0", 15);
+  }
+  ASSERT_TRUE(prism.Load());
+  EXPECT_FALSE(prism.has_code_choice_format());
+  EXPECT_FALSE(prism.HasCodeChoices());
+  EXPECT_TRUE(prism.QueryCodeChoices("986").empty());
+  prism.Remove();
+}
+
+TEST_F(RimePrismTest, NoCodeChoicesForIdentityOrEqualSets) {
+  EXPECT_FALSE(prism_->HasCodeChoices());
+  EXPECT_TRUE(prism_->QueryCodeChoices("good").empty());
+  Prism prism(path{"equal_choices_test.prism.bin"});
+  prism.Remove();
+  const Syllabary syllables{"a", "b"};
+  Script script;
+  script["23"] = {Spelling("a"), Spelling("b")};
+  script["ab"] = script["23"];
+  ASSERT_TRUE(prism.Build(syllables, &script));
+  ASSERT_TRUE(prism.Save());
+  ASSERT_TRUE(prism.Load());
+  EXPECT_TRUE(prism.has_code_choice_format());
+  EXPECT_FALSE(prism.HasCodeChoices());
+  EXPECT_TRUE(prism.QueryCodeChoices("23").empty());
+  EXPECT_TRUE(prism.QueryCodeChoices("ab").empty());
+  prism.Remove();
 }

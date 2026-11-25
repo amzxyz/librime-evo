@@ -258,6 +258,22 @@ static bool starts_with_completion(an<Translation> translation) {
   return cand && cand->type() == "completion";
 }
 
+void TableTranslator::GetCodeChoices(const string& input,
+                                     const Segment& segment,
+                                     vector<CodeChoice>* result) {
+  if (input.empty() || !segment.HasAnyTagIn(tags_) || !engine_ || !dict_ ||
+      !SelectPrism(dict_.get(), engine_->context(), user_dict_.get()))
+    return;
+  string code = input;
+  boost::trim_right_if(code, boost::is_any_of(delimiters_));
+  const auto choices = dict_->prism()->QueryCodeChoices(code);
+  for (size_t i = 0; i < choices.size(); ++i) {
+    string choice(choices[i]);
+    result->push_back(
+        {segment.start, segment.start + code.size(), choice, choice});
+  }
+}
+
 an<Translation> TableTranslator::Query(const string& input,
                                        const Segment& segment) {
   if (!segment.HasAnyTagIn(tags_))

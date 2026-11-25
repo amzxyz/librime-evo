@@ -173,6 +173,15 @@ typedef struct rime_candidate_preview_t {
   char* text_after_selection;
 } RimeCandidatePreview;
 
+#define RIME_EVO_CODE_CHOICES 1
+
+typedef struct rime_code_choice_t {
+  size_t start;  // byte offset in raw input
+  size_t end;    // exclusive
+  char* label;
+  char* replacement;
+} RimeCodeChoice;
+
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
  */
@@ -518,6 +527,17 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                                 RimeCandidatePreview* preview);
   //! free a RimeCandidatePreview filled by get_candidate_preview
   Bool (*free_candidate_preview)(RimeCandidatePreview* preview);
+
+  //! Enumerate choices for the first unresolved code in the active segment.
+  Bool (*get_code_choices)(RimeSessionId session_id,
+                           RimeCodeChoice** choices,
+                           size_t* count);
+  void (*free_code_choices)(RimeCodeChoice* choices, size_t count);
+  //! Validate a current choice and replace its raw input range atomically.
+  Bool (*select_code_choice)(RimeSessionId session_id,
+                             size_t start,
+                             size_t end,
+                             const char* replacement);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

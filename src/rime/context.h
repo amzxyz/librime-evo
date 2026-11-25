@@ -63,6 +63,7 @@ class RIME_DLL Context {
   bool ClearNonConfirmedComposition();
   bool RefreshNonConfirmedComposition();
 
+  bool ReplaceInput(size_t start, size_t end, const string& replacement);
   void set_input(const string& value);
   const string& input() const { return input_; }
 
