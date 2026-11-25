@@ -11,6 +11,7 @@
 #include <rime/common.h>
 #include <rime/component.h>
 #include <rime/ticket.h>
+#include <rime/algo/code_choice.h>
 
 namespace rime {
 
@@ -30,6 +31,10 @@ class Translator : public Class<Translator, const Ticket&> {
 
   // Only translators that can apply the suffix may provide candidates for it.
   virtual bool SupportsAuxiliarySuffix() const { return false; }
+
+  virtual void GetCodeChoices(const string&,
+                              const Segment&,
+                              vector<CodeChoice>*) {}
 
   string name_space() const { return name_space_; }
 

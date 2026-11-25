@@ -29,6 +29,9 @@ class TableTranslator : public Translator,
   TableTranslator(const Ticket& ticket);
 
   virtual an<Translation> Query(const string& input, const Segment& segment);
+  void GetCodeChoices(const string& input,
+                      const Segment& segment,
+                      vector<CodeChoice>* result) override;
   virtual bool Memorize(const CommitEntry& commit_entry);
 
   an<Translation> MakeSentence(const string& input,

@@ -584,3 +584,21 @@ TEST_F(RimeWorkspacePrismTest, ReentryCannotModifyWorkspace) {
       deployer_.before_deploy().connect(prepare));
   EXPECT_TRUE(WorkspaceUpdate().Run(&deployer_));
 }
+
+TEST(RimeBuildPlanTest, SkippedResourcesFailTheirOwningSchemas) {
+  Deployer deployer;
+  BuildPlan plan(&deployer);
+  plan.AddUnit(CompileUnit("broken", 1, [] { return false; }), "first");
+  bool ran = false;
+  plan.AddUnit(CompileUnit("dependent", 1,
+                           [&] {
+                             ran = true;
+                             return true;
+                           }),
+               "second");
+  plan.AddDependency("broken", "dependent");
+  set<string> failed;
+  ASSERT_TRUE(plan.Run(&failed));
+  EXPECT_FALSE(ran);
+  EXPECT_EQ((set<string>{"first", "second"}), failed);
+}

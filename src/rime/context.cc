@@ -309,6 +309,20 @@ void Context::set_composition(Composition&& comp) {
   composition_ = std::move(comp);
 }
 
+bool Context::ReplaceInput(size_t start,
+                           size_t end,
+                           const string& replacement) {
+  if (start < composition_.GetConfirmedPosition() || start >= end ||
+      end > caret_pos_ || end > input_.size() || replacement.empty())
+    return false;
+  if (input_.compare(start, end - start, replacement) == 0)
+    return false;
+  input_.replace(start, end - start, replacement);
+  caret_pos_ = caret_pos_ - (end - start) + replacement.size();
+  update_notifier_(this);
+  return true;
+}
+
 void Context::set_input(const string& value) {
   input_ = value;
   caret_pos_ = input_.length();

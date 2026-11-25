@@ -681,7 +681,7 @@ bool DictCompiler::Compile(const path& schema_file) {
     if (prism_->Exists() && prism_->Load()) {
       rebuild = prism_->dict_file_checksum() != syllabary_checksum ||
                 prism_->schema_file_checksum() != algebra_checksum ||
-                !prism_->has_syllabary();
+                !prism_->has_syllabary() || !prism_->has_code_choice_format();
       prism_->Close();
     }
     if ((rebuild || (options_ & kRebuildPrism)) &&

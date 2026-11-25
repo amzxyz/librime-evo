@@ -4,6 +4,7 @@
 //
 // 2011-04-24 GONG Chen <chen.sst@gmail.com>
 //
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <rime/common.h>
@@ -101,6 +102,7 @@ class ConcreteEngine : public Engine {
   virtual void ApplySchema(Schema* schema);
   virtual void CommitText(string text);
   virtual void Compose(Context* ctx);
+  void GetCodeChoices(vector<CodeChoice>* result) override;
 
  protected:
   bool ProcessKey(const KeyEvent& key_event, bool synthetic);
@@ -280,6 +282,53 @@ void ConcreteEngine::Compose(Context* ctx) {
   CalculateSegmentation(&comp);
   TranslateSegments(&comp);
   DLOG(INFO) << "composition: [" << comp.GetDebugText() << "]";
+}
+
+void ConcreteEngine::GetCodeChoices(vector<CodeChoice>* result) {
+  if (!result)
+    return;
+  result->clear();
+  if (context_->get_option("ascii_mode") || active_engine() != this)
+    return;
+  const auto& input = context_->input();
+  const size_t caret = context_->caret_pos();
+  for (const auto& segment : context_->composition()) {
+    if (segment.status >= Segment::kSelected || segment.start >= caret ||
+        segment.end > caret || segment.auxiliary_suffix)
+      continue;
+    const auto code = input.substr(segment.start, segment.end - segment.start);
+    for (auto& entry : translators_) {
+      if (entry.enabled)
+        entry.component->GetCodeChoices(code, segment, result);
+    }
+    if (!result->empty())
+      break;
+  }
+  std::sort(result->begin(), result->end(),
+            [](const CodeChoice& a, const CodeChoice& b) {
+              if (a.start != b.start)
+                return a.start < b.start;
+              if (a.end != b.end)
+                return a.end > b.end;
+              if (a.label != b.label)
+                return a.label < b.label;
+              return a.replacement < b.replacement;
+            });
+  if (result->empty())
+    return;
+  const size_t first = result->front().start;
+  result->erase(std::remove_if(result->begin(), result->end(),
+                               [first](const CodeChoice& choice) {
+                                 return choice.start != first;
+                               }),
+                result->end());
+  result->erase(std::unique(result->begin(), result->end(),
+                            [](const CodeChoice& a, const CodeChoice& b) {
+                              return a.start == b.start && a.end == b.end &&
+                                     a.label == b.label &&
+                                     a.replacement == b.replacement;
+                            }),
+                result->end());
 }
 
 void ConcreteEngine::CalculateSegmentation(Segmentation* segments) {

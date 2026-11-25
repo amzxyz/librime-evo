@@ -10,6 +10,7 @@
 #include <rime_api.h>
 #include <rime/common.h>
 #include <rime/messenger.h>
+#include <rime/algo/code_choice.h>
 
 namespace rime {
 
@@ -27,6 +28,7 @@ class Engine : public Messenger {
   virtual void ApplySchema(Schema*) {}
   virtual void CommitText(string text) { sink_(text); }
   virtual void Compose(Context*) {}
+  virtual void GetCodeChoices(vector<CodeChoice>*) {}
 
   Schema* schema() const { return schema_.get(); }
   Context* context() const { return context_.get(); }

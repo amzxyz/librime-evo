@@ -389,6 +389,55 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
 
 ScriptTranslator::~ScriptTranslator() = default;
 
+void ScriptTranslator::GetCodeChoices(const string& input,
+                                      const Segment& segment,
+                                      vector<CodeChoice>* result) {
+  if (input.empty() || !segment.HasAnyTagIn(tags_) || canonicalizer_ ||
+      !dict_ || !SelectPrism() || !dict_->loaded())
+    return;
+  auto& prism = *dict_->prism();
+  if (!prism.HasCodeChoices())
+    return;
+  // Only complete edges on a viable native syllable path are selectable.
+  Syllabifier syllabifier(delimiters_, enable_completion_, strict_spelling_);
+  SyllableGraph graph;
+  syllabifier.BuildSyllableGraph(input, prism, &graph);
+  const char delimiter =
+      delimiters_.find('\'') != string::npos ? '\'' : delimiters_.front();
+  for (const auto& start : graph.edges) {
+    size_t begin = start.first;
+    while (begin < input.size() &&
+           delimiters_.find(input[begin]) != string::npos)
+      ++begin;
+    for (auto edge = start.second.rbegin(); edge != start.second.rend();
+         ++edge) {
+      if (edge->second.empty())
+        continue;
+      size_t end = edge->first;
+      while (end > begin && delimiters_.find(input[end - 1]) != string::npos)
+        --end;
+      if (end <= begin)
+        continue;
+      const auto code = std::string_view(input).substr(begin, end - begin);
+      const auto choices = prism.QueryCodeChoices(code);
+      if (choices.empty())
+        continue;
+      for (size_t i = 0; i < choices.size(); ++i) {
+        string choice(choices[i]);
+        string replacement;
+        if (begin && delimiters_.find(input[begin - 1]) == string::npos)
+          replacement += delimiter;
+        replacement += choice;
+        if (end == input.size() || delimiters_.find(input[end]) == string::npos)
+          replacement += delimiter;
+        result->push_back(
+            {segment.start + begin, segment.start + end, choice, replacement});
+      }
+      return;
+    }
+  }
+}
+
 an<Translation> ScriptTranslator::Query(const string& input,
                                         const Segment& segment) {
   const auto& suffix = segment.auxiliary_suffix;

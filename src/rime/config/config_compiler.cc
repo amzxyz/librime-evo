@@ -590,20 +590,25 @@ bool ConfigCompiler::ResolveDependencies(const string& path) {
     return true;
   }
   if (HasCircularDependencies(graph_.get(), path)) {
-    LOG(WARNING) << "circular dependencies detected in " << path;
+    LOG(WARNING) << "circular dependencies detected: "
+                 << boost::join(graph_->resolve_chain, " -> ") << " -> "
+                 << path;
     return false;
   }
   graph_->resolve_chain.push_back(path);
+  struct PopResolveChain {
+    vector<string>& chain;
+    ~PopResolveChain() { chain.pop_back(); }
+  } pop{graph_->resolve_chain};
   auto& deps = found->second;
   for (auto iter = deps.begin(); iter != deps.end();) {
     if (!(*iter)->Resolve(this)) {
-      LOG(ERROR) << "unresolved dependency: " << **iter;
+      LOG(ERROR) << "unresolved dependency at '" << path << "': " << **iter;
       return false;
     }
     LOG(INFO) << "resolved: " << **iter;
     iter = deps.erase(iter);
   }
-  graph_->resolve_chain.pop_back();
   DLOG(INFO) << "all dependencies resolved.";
   return true;
 }

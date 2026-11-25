@@ -41,6 +41,7 @@ class Session {
   void ApplySchema(Schema* schema);
 
   Context* context() const;
+  Engine* engine() const { return engine_.get(); }
   Schema* schema() const;
   time_t last_active_time() const { return last_active_time_; }
   const string& commit_text() const { return commit_text_; }

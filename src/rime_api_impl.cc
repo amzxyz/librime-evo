@@ -8,6 +8,7 @@
 #include <rime/config.h>
 #include <rime/context.h>
 #include <rime/deployer.h>
+#include <rime/engine.h>
 #include <rime/key_event.h>
 #include <rime/menu.h>
 #include <rime/module.h>
@@ -1046,6 +1047,60 @@ static Bool fill_candidate_preview(const Composition::CandidatePreview& src,
   return True;
 }
 
+static Bool RimeGetCodeChoices(RimeSessionId session_id,
+                               RimeCodeChoice** choices,
+                               size_t* count) {
+  if (!choices || !count)
+    return False;
+  *choices = nullptr;
+  *count = 0;
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !session->engine())
+    return False;
+  vector<CodeChoice> result;
+  session->engine()->GetCodeChoices(&result);
+  if (result.empty())
+    return True;
+  auto* items = new RimeCodeChoice[result.size()]{};
+  for (size_t i = 0; i < result.size(); ++i) {
+    items[i] = {result[i].start, result[i].end, dup_string(result[i].label),
+                dup_string(result[i].replacement)};
+  }
+  *choices = items;
+  *count = result.size();
+  return True;
+}
+
+static void RimeFreeCodeChoices(RimeCodeChoice* choices, size_t count) {
+  if (!choices)
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    delete[] choices[i].label;
+    delete[] choices[i].replacement;
+  }
+  delete[] choices;
+}
+
+static Bool RimeSelectCodeChoice(RimeSessionId session_id,
+                                 size_t start,
+                                 size_t end,
+                                 const char* replacement) {
+  if (!replacement)
+    return False;
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !session->engine() || !session->context())
+    return False;
+  vector<CodeChoice> result;
+  session->engine()->GetCodeChoices(&result);
+  for (const auto& choice : result) {
+    if (choice.start == start && choice.end == end &&
+        choice.replacement == replacement) {
+      return Bool(session->context()->ReplaceInput(start, end, replacement));
+    }
+  }
+  return False;
+}
+
 static Bool RimeGetCandidatePreview(RimeSessionId session_id,
                                     RimeCandidatePreview* preview) {
   if (!preview || preview->data_size <= 0)
@@ -1276,6 +1331,9 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.change_page = &RimeChangePage;
     s_api.get_candidate_preview = &RimeGetCandidatePreview;
     s_api.free_candidate_preview = &RimeFreeCandidatePreview;
+    s_api.get_code_choices = &RimeGetCodeChoices;
+    s_api.free_code_choices = &RimeFreeCodeChoices;
+    s_api.select_code_choice = &RimeSelectCodeChoice;
   }
   return &s_api;
 }

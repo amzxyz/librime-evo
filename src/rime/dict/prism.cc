@@ -5,8 +5,10 @@
 // 2011-05-16 Zou Xu <zouivex@gmail.com>
 // 2012-01-26 GONG Chen <chen.sst@gmail.com>  spelling algebra support
 //
+#include <algorithm>
 #include <cfloat>
 #include <cstring>
+#include <limits>
 #include <queue>
 #include <rime/algo/algebra.h>
 #include <rime/dict/prism.h>
@@ -27,9 +29,132 @@ struct node_t {
 const int32_t kTypeIsCorrectionMask = 1 << 30;
 const int32_t kSpellingTypeMask = ~kTypeIsCorrectionMask;
 
+struct CodeChoiceData {
+  vector<uint32_t> words;
+  vector<char> strings;
+};
+
+// Compute the strict subset relation while the complete Script is available.
+// The trie is built from the same ordered keys, so its values are the indices
+// in this table. No reverse trie traversal or runtime index is necessary.
+bool BuildCodeChoiceData(const Script* script,
+                         const map<string, SyllableId>& syllable_to_id,
+                         const vector<const char*>& keys,
+                         CodeChoiceData* data) {
+  if (!script || std::none_of(script->begin(), script->end(),
+                              [](const Script::value_type& entry) {
+                                return entry.second.size() > 1;
+                              }))
+    return true;
+
+  struct Group {
+    vector<SyllableId> ids;
+    vector<size_t> refinements;
+    size_t representative;
+  };
+  const size_t invalid = static_cast<size_t>(-1);
+  const size_t max_offset = (std::numeric_limits<uint32_t>::max)();
+  vector<size_t> group_by_spelling(keys.size(), invalid);
+  vector<Group> groups;
+  hash_map<vector<SyllableId>, size_t> group_ids;
+  size_t spelling_id = 0;
+  for (const auto& entry : *script) {
+    const size_t index = spelling_id++;
+    vector<SyllableId> ids;
+    ids.reserve(entry.second.size());
+    for (const auto& spelling : entry.second) {
+      if (spelling.properties.is_correction ||
+          spelling.properties.type >= kAbbreviation) {
+        ids.clear();
+        break;
+      }
+      auto found = syllable_to_id.find(spelling.str);
+      if (found == syllable_to_id.end())
+        return false;
+      ids.push_back(found->second);
+    }
+    if (ids.empty())
+      continue;
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    auto inserted = group_ids.emplace(ids, groups.size());
+    if (inserted.second)
+      groups.push_back({std::move(ids), {}, index});
+    group_by_spelling[index] = inserted.first->second;
+  }
+
+  // Dense syllable IDs make a vector of posting lists cheaper than a hash.
+  // Start with the rarest target ID, then verify exact integer containment.
+  vector<vector<size_t>> postings(syllable_to_id.size());
+  for (size_t i = 0; i < groups.size(); ++i) {
+    if (groups[i].ids.size() > 1) {
+      for (auto id : groups[i].ids)
+        postings[id].push_back(i);
+    }
+  }
+  bool has_refinements = false;
+  for (size_t i = 0; i < groups.size(); ++i) {
+    const auto& target = groups[i].ids;
+    const vector<size_t>* candidates = &postings[target.front()];
+    for (auto id : target) {
+      if (postings[id].size() < candidates->size())
+        candidates = &postings[id];
+      if (candidates->empty())
+        break;
+    }
+    for (size_t source : *candidates) {
+      const auto& ids = groups[source].ids;
+      if (ids.size() > target.size() &&
+          std::includes(ids.begin(), ids.end(), target.begin(), target.end())) {
+        groups[source].refinements.push_back(i);
+        has_refinements = true;
+      }
+    }
+  }
+  if (!has_refinements)
+    return true;
+  if (keys.size() >= max_offset)
+    return false;
+
+  // First N words are directly indexed by spelling ID. Zero means no list.
+  // Each list contains its length followed by offsets into the string pool.
+  // Equal source sets and repeated target strings share storage.
+  data->words.resize(keys.size());
+  vector<uint32_t> list_offsets(groups.size());
+  vector<size_t> string_offsets(groups.size(), invalid);
+  for (size_t i = 0; i < groups.size(); ++i) {
+    const auto& targets = groups[i].refinements;
+    if (targets.empty())
+      continue;
+    if (targets.size() >= max_offset - data->words.size())
+      return false;
+    list_offsets[i] = static_cast<uint32_t>(data->words.size());
+    data->words.push_back(static_cast<uint32_t>(targets.size()));
+    // Groups are created in Script key order, so targets are already sorted.
+    for (size_t target : targets) {
+      auto& offset = string_offsets[target];
+      if (offset == invalid) {
+        const char* key = keys[groups[target].representative];
+        const size_t bytes = std::strlen(key) + 1;
+        if (bytes > max_offset - data->strings.size())
+          return false;
+        offset = data->strings.size();
+        data->strings.insert(data->strings.end(), key, key + bytes);
+      }
+      data->words.push_back(static_cast<uint32_t>(offset));
+    }
+  }
+  for (size_t i = 0; i < keys.size(); ++i) {
+    const size_t group = group_by_spelling[i];
+    if (group != invalid)
+      data->words[i] = list_offsets[group];
+  }
+  return true;
+}
+
 }  // namespace
 
-const char kPrismFormat[] = "Rime::Prism/6.0";
+const char kPrismFormat[] = "Rime::Prism/7.0";
 const double kPrismFormatVersion = 5.0;
 
 const char kPrismFormatPrefix[] = "Rime::Prism/";
@@ -85,6 +210,9 @@ Prism::Prism(const path& file_path)
     : MappedFile(file_path), trie_(new Darts::DoubleArray) {}
 
 bool Prism::Load() {
+  metadata_ = nullptr;
+  spelling_map_ = nullptr;
+  format_ = 0.0;
   LOG(INFO) << "loading prism file: " << file_path();
 
   if (IsOpen())
@@ -146,24 +274,45 @@ bool Prism::Build(const Syllabary& syllabary,
                   uint32_t dict_file_checksum,
                   uint32_t schema_file_checksum,
                   bool has_packs) {
+  metadata_ = nullptr;
+  spelling_map_ = nullptr;
+  format_ = 0.0;
   // building double-array trie
   size_t num_syllables = syllabary.size();
   size_t num_spellings = script ? script->size() : syllabary.size();
   vector<const char*> keys(num_spellings);
   size_t key_id = 0;
   size_t map_size = 0;
+  size_t tips_bytes = 0;
   size_t max_key_length = 0;
+  if (!num_spellings)
+    return false;
   if (script) {
     for (auto it = script->begin(); it != script->end(); ++it, ++key_id) {
       keys[key_id] = it->first.c_str();
       max_key_length = (std::max)(max_key_length, it->first.length());
       map_size += it->second.size();
+      for (const auto& spelling : it->second) {
+        if (!spelling.properties.tips.empty())
+          tips_bytes += spelling.properties.tips.size() + 1;
+      }
     }
   } else {
     for (auto it = syllabary.begin(); it != syllabary.end(); ++it, ++key_id) {
       keys[key_id] = it->c_str();
       max_key_length = (std::max)(max_key_length, it->length());
     }
+  }
+  map<string, SyllableId> syllable_to_id;
+  if (script) {
+    SyllableId id = 0;
+    for (const auto& syllable : syllabary)
+      syllable_to_id.emplace(syllable, id++);
+  }
+  CodeChoiceData choice_data;
+  if (!BuildCodeChoiceData(script, syllable_to_id, keys, &choice_data)) {
+    LOG(ERROR) << "error building prism code choice index.";
+    return false;
   }
   if (0 != trie_->build(num_spellings, &keys[0])) {
     LOG(ERROR) << "Error building double-array trie.";
@@ -172,15 +321,19 @@ bool Prism::Build(const Syllabary& syllabary,
   // creating prism file
   size_t array_size = trie_->size();
   size_t image_size = trie_->total_size();
-  const size_t kDescriptorExtraSize = 32;
+  // Reserve the actual tips and choice data before mapping the file.
+  // Growing a mapped file would invalidate previously allocated pointers.
   size_t estimated_map_size =
-      num_spellings * 12 +
-      map_size * (4 + sizeof(prism::SpellingDescriptor) + kDescriptorExtraSize);
+      num_spellings * 12 + map_size * (4 + sizeof(prism::SpellingDescriptor)) +
+      tips_bytes;
+  const size_t choice_bytes =
+      choice_data.words.size() * sizeof(uint32_t) + choice_data.strings.size();
   const size_t kReservedSize = 1024;
   size_t code_bytes = syllabary.size() * sizeof(String);
   for (const auto& code : syllabary)
     code_bytes += code.size() + 1;
-  if (!Create(image_size + estimated_map_size + code_bytes + kReservedSize)) {
+  if (!Create(image_size + estimated_map_size + code_bytes + choice_bytes +
+              kReservedSize)) {
     LOG(ERROR) << "Error creating prism file '" << file_path() << "'.";
     return false;
   }
@@ -230,11 +383,6 @@ bool Prism::Build(const Syllabary& syllabary,
   metadata->double_array_size = array_size;
   // building spelling map
   if (script) {
-    map<string, SyllableId> syllable_to_id;
-    SyllableId syll_id = 0;
-    for (auto it = syllabary.begin(); it != syllabary.end(); ++it) {
-      syllable_to_id[*it] = syll_id++;
-    }
     auto spelling_map = CreateArray<prism::SpellingMapItem>(num_spellings);
     if (!spelling_map) {
       LOG(ERROR) << "Error creating spelling map.";
@@ -271,10 +419,25 @@ bool Prism::Build(const Syllabary& syllabary,
     metadata->spelling_map = spelling_map;
     spelling_map_ = spelling_map;
   }
+  if (!choice_data.words.empty()) {
+    auto words = Allocate<uint32_t>(choice_data.words.size());
+    auto strings = Allocate<char>(choice_data.strings.size());
+    if (!words || !strings) {
+      LOG(ERROR) << "error allocating prism code choice data.";
+      return false;
+    }
+    std::copy(choice_data.words.begin(), choice_data.words.end(), words);
+    std::copy(choice_data.strings.begin(), choice_data.strings.end(), strings);
+    metadata->code_choices.size = choice_data.words.size();
+    metadata->code_choices.at = words;
+    metadata->code_choice_strings.size = choice_data.strings.size();
+    metadata->code_choice_strings.at = strings;
+    LOG(INFO) << "prism code choice index: " << choice_bytes << " bytes.";
+  }
   // at last, complete the metadata
   std::strncpy(metadata->format, kPrismFormat,
                prism::Metadata::kFormatMaxLength);
-  format_ = 6.0;
+  format_ = 7.0;
   return true;
 }
 
@@ -359,6 +522,34 @@ void Prism::ExpandSearch(std::string_view key,
       }
     }
   }
+}
+
+bool Prism::HasCodeChoices() const {
+  return IsOpen() && has_code_choice_format() && metadata_ &&
+         metadata_->code_choices.size > metadata_->num_spellings &&
+         metadata_->code_choices.at && metadata_->code_choice_strings.at;
+}
+
+prism::CodeChoiceView Prism::QueryCodeChoices(int spelling_id) const {
+  if (!HasCodeChoices() || spelling_id < 0 ||
+      static_cast<uint32_t>(spelling_id) >= metadata_->num_spellings)
+    return {};
+  const auto& words = metadata_->code_choices;
+  const uint32_t offset = words.at[spelling_id];
+  if (offset < metadata_->num_spellings || offset >= words.size)
+    return {};
+  const uint32_t count = words.at[offset];
+  if (!count || count > words.size - offset - 1)
+    return {};
+  return {words.at.get() + offset + 1, metadata_->code_choice_strings.at.get(),
+          count};
+}
+
+prism::CodeChoiceView Prism::QueryCodeChoices(std::string_view key) const {
+  int id = -1;
+  if (key.empty() || !HasCodeChoices() || !GetValue(key, &id))
+    return {};
+  return QueryCodeChoices(id);
 }
 
 SpellingAccessor Prism::QuerySpelling(SyllableId spelling_id) {
