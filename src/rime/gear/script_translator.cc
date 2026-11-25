@@ -42,28 +42,6 @@ namespace rime {
 
 namespace {
 
-using AuxiliarySwitch = std::variant<bool, string>;
-
-AuxiliarySwitch ReadAuxiliarySwitch(Config* config, const string& key) {
-  bool enabled = false;
-  if (config->GetBool(key, &enabled))
-    return enabled;
-  if (auto map = config->GetMap(key)) {
-    if (auto option = map->GetValue("option")) {
-      if (!option->empty())
-        return option->str();
-    }
-  }
-  return false;
-}
-
-bool AuxiliarySwitchEnabled(const AuxiliarySwitch& setting,
-                            const Context* context) {
-  if (const auto* enabled = std::get_if<bool>(&setting))
-    return *enabled;
-  return context->get_option(std::get<string>(setting));
-}
-
 struct SyllabifyTask {
   const Code& code;
   const SyllableGraph& graph;
@@ -392,10 +370,15 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
       }
     }
     config->GetString(name_space_ + "/aux", &auxiliary_type_);
-    enable_direct_char_aux_ =
-        ReadAuxiliarySwitch(config, name_space_ + "/enable_direct_char_aux");
-    enable_direct_word_aux_ =
-        ReadAuxiliarySwitch(config, name_space_ + "/enable_direct_word_aux");
+    string mode;
+    if (config->GetString(name_space_ + "/direct_aux_mode", &mode)) {
+      if (mode == "char")
+        direct_aux_mode_ = DirectAuxMode::kChar;
+      else if (mode == "word")
+        direct_aux_mode_ = DirectAuxMode::kWord;
+      else if (mode != "off")
+        LOG(ERROR) << "invalid direct_aux_mode: " << mode;
+    }
   }
   if (enable_correction_) {
     if (auto* corrector = Corrector::Require("corrector")) {
@@ -434,8 +417,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
       return nullptr;
   }
   const bool use_direct_char_aux =
-      AuxiliarySwitchEnabled(enable_direct_char_aux_, context) &&
-      LoadAuxiliaryMatcher();
+      direct_aux_mode_ == DirectAuxMode::kChar && LoadAuxiliaryMatcher();
 
   bool user_dict_available =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
@@ -454,7 +436,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
       ordinary =
           poet_->ContextualWeighted(ordinary, input, segment.start, this);
   }
-  if (suffix || !AuxiliarySwitchEnabled(enable_direct_word_aux_, context) ||
+  if (suffix || direct_aux_mode_ != DirectAuxMode::kWord ||
       !LoadAuxiliaryMatcher()) {
     return ordinary;
   }
