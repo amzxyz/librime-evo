@@ -165,6 +165,8 @@ bool ValidatePrismReferences(Config* schema,
         return false;
     }
     for (const auto& entry : *map) {
+      if (path.empty() && entry.first == "build")
+        continue;
       const string child =
           path.empty() ? entry.first : path + "/" + entry.first;
       if (!ValidatePrismReferences(schema, entry.second, child))

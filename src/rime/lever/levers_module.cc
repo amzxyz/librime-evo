@@ -9,12 +9,19 @@
 #include <rime/common.h>
 #include <rime/registry.h>
 #include <rime/lever/deployment_tasks.h>
+#include <rime/lever/dictionary_build_compiler.h>
+#include <rime/lever/rewrite_compiler.h>
 
 using namespace rime;
 
 static void rime_levers_initialize() {
   LOG(INFO) << "registering components from module 'levers'.";
   Registry& r = Registry::instance();
+
+  // Build sections are independent compiler components.
+  r.Register("build/dictionaries", new Component<DictionaryBuildCompiler>);
+  r.Register("build/auxiliary", new Component<AuxiliaryBuildCompiler>);
+  r.Register("build/rewrites", new Component<RewriteCompiler>);
 
   // deployment tools
   r.Register("detect_modifications", new Component<DetectModifications>);

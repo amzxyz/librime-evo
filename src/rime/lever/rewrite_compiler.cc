@@ -524,8 +524,9 @@ bool RewriteCompiler::ReadSpecs(Config* config, vector<Spec>* specs) {
   return true;
 }
 
-bool RewriteCompiler::Compile(const Spec& spec, Deployer* deployer) {
-  const bool rebuild = false;
+bool RewriteCompiler::Compile(const Spec& spec,
+                              Deployer* deployer,
+                              bool rebuild) {
   if (!deployer || !safe_path::ValidRelativeName(spec.name, false) ||
       spec.ids.size() != spec.stages.size())
     return false;
@@ -561,6 +562,60 @@ bool RewriteCompiler::Compile(const Spec& spec, Deployer* deployer) {
       success = false;
   }
   return success;
+}
+
+bool RewriteCompiler::Collect(const BuildRequest& request, BuildPlan* plan) {
+  vector<Spec> specs;
+  if (!ReadSpecs(request.config, &specs))
+    return false;
+  for (auto& definition : specs) {
+    auto existing = builds_.find(definition.name);
+    if (existing == builds_.end()) {
+      auto shared =
+          std::find_if(builds_.begin(), builds_.end(), [&](const auto& item) {
+            return item.second.spec->ids == definition.ids;
+          });
+      if (shared != builds_.end()) {
+        auto& build = shared->second;
+        if (!plan->AddAlias("rewrite:" + definition.name, build.unit))
+          return false;
+        build.spec->aliases.push_back(definition.name);
+        plan->unit(build.unit)
+            .AddOutput(RewriteStore::FileName(definition.name));
+        plan->AddOwner(build.unit, request.schema_id);
+        builds_.emplace(definition.name,
+                        Build{build.spec, build.unit, request.schema_id});
+        continue;
+      }
+      auto spec = New<Spec>(std::move(definition));
+      CompileUnit unit(
+          "rewrite:" + spec->name, spec->estimated_memory,
+          [spec, deployer = deployer_, rebuild = request.rebuild]() {
+            return Compile(*spec, deployer, rebuild);
+          });
+      unit.AddOutput(RewriteStore::FileName(spec->name));
+      const size_t index = plan->AddUnit(std::move(unit), request.schema_id);
+      existing =
+          builds_.emplace(spec->name, Build{spec, index, request.schema_id})
+              .first;
+    } else if (existing->second.spec->ids != definition.ids) {
+      LOG(ERROR) << "conflicting rewrite resource '" << definition.name
+                 << "' in schemas '" << existing->second.schema << "' and '"
+                 << request.schema_id << "'.";
+      return false;
+    }
+    plan->AddOwner(existing->second.unit, request.schema_id);
+  }
+  return true;
+}
+
+bool RewriteCompiler::Prepare() {
+  RewriteResource::ReleaseForDeployment();
+  return true;
+}
+
+void RewriteCompiler::Finish() {
+  RewriteResource::ReleaseForDeployment();
 }
 
 }  // namespace rime

@@ -913,6 +913,16 @@ bool DictCompiler::CompileAuxiliary(const path& schema_file) {
         << "build/auxiliary/dictionary is required for auxiliary algebra";
     return false;
   }
+  return CompileAuxiliary(source_name, groups);
+}
+
+bool DictCompiler::CompileAuxiliary(
+    string source_name,
+    const vector<pair<string, an<ConfigList>>>& groups) {
+  if (groups.empty())
+    return true;
+  if (source_name.empty())
+    return false;
   if (!boost::iends_with(source_name, ".yaml"))
     source_name += ".yaml";
   the<ResourceResolver> source_resolver(
