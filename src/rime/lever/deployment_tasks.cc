@@ -21,7 +21,6 @@
 #include <rime/algo/fs.h>
 #include <rime/algo/utilities.h>
 #include <rime/dict/dict_compiler.h>
-#include <rime/gear/rewriter.h>
 #include <rime/lever/compile_unit.h>
 #include <rime/lever/deployment_tasks.h>
 #include <rime/lever/rewrite_compiler.h>
@@ -214,20 +213,13 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
 
   if (!MaybeCreateDirectory(deployer->staging_dir))
     return false;
-  const bool rewrite_workspace_started =
-      RewriteCompiler::BeginWorkspace(deployer);
-  auto abort_workspace = [&] {
-    if (rewrite_workspace_started)
-      RewriteCompiler::AbortWorkspace(deployer);
-    return false;
-  };
+  RewriteResource::ReleaseForDeployment();
 
   LOG(INFO) << "updating schemas.";
   int success = 0;
   int failure = 0;
   set<string> seen_schemas;
   vector<string> active_schema_ids;
-  vector<pair<string, the<Config>>> prepared_schemas;
   map<string, set<string>> unit_owners;
   vector<CompileUnit> units;
   struct DictionaryBuild {
@@ -242,6 +234,8 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
   };
   map<string, DictionaryBuild> dictionary_builds;
   map<string, PrismBuild> prism_builds;
+  RewriteCompiler rewrite_compiler(deployer);
+  map<string, pair<an<RewriteCompiler::Spec>, size_t>> rewrite_builds;
   auto schema_component = Config::Require("schema");
   the<ResourceResolver> resolver(Service::instance().CreateResourceResolver(
       {"schema_source_file", "", ".schema.yaml"}));
@@ -302,7 +296,7 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
         LOG(ERROR) << "conflicting packs for dictionary '" << definition.name
                    << "' in schemas '" << existing->second.schema << "' and '"
                    << schema_id << "'";
-        return abort_workspace();
+        return false;
       }
       auto& build = existing->second;
       auto& unit = units[build.unit];
@@ -320,7 +314,7 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
           LOG(ERROR) << "conflicting prism '" << output << "' in schemas '"
                      << owner->second.schema << "' and '" << schema_id
                      << "'; use distinct algebra group names";
-          return abort_workspace();
+          return false;
         }
       }
     }
@@ -343,42 +337,67 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
       unit_owners[unit.id()].insert(schema_id);
       units.push_back(std::move(unit));
     }
+    vector<RewriteCompiler::Spec> rewrites;
+    if (!rewrite_compiler.ReadSpecs(schema_config.get(), &rewrites))
+      return false;
+    for (auto& definition : rewrites) {
+      auto existing = rewrite_builds.find(definition.name);
+      if (existing == rewrite_builds.end()) {
+        auto shared =
+            std::find_if(rewrite_builds.begin(), rewrite_builds.end(),
+                         [&](const auto& item) {
+                           return item.second.first->ids == definition.ids;
+                         });
+        if (shared != rewrite_builds.end()) {
+          auto& spec = shared->second.first;
+          spec->aliases.push_back(definition.name);
+          units[shared->second.second].AddOutput(
+              RewriteStore::FileName(definition.name));
+          existing =
+              rewrite_builds.emplace(definition.name, shared->second).first;
+          unit_owners[units[existing->second.second].id()].insert(schema_id);
+          continue;
+        }
+        auto spec = New<RewriteCompiler::Spec>(std::move(definition));
+        const auto index = units.size();
+        existing =
+            rewrite_builds.emplace(spec->name, std::make_pair(spec, index))
+                .first;
+        units.emplace_back("rewrite:" + spec->name, spec->estimated_memory,
+                           [spec, deployer]() {
+                             return RewriteCompiler::Compile(*spec, deployer);
+                           });
+        units.back().AddOutput(RewriteStore::FileName(spec->name));
+      } else if (existing->second.first->ids != definition.ids) {
+        LOG(ERROR) << "conflicting rewrite resource '" << definition.name
+                   << "'.";
+        return false;
+      }
+      unit_owners[units[existing->second.second].id()].insert(schema_id);
+    }
     active_schema_ids.push_back(schema_id);
-    prepared_schemas.emplace_back(schema_id, std::move(schema_config));
   }
   CompileGraph graph;
   for (auto& unit : units) {
     if (!graph.AddUnit(std::move(unit)))
-      return abort_workspace();
+      return false;
   }
   CompileScheduler scheduler;
   auto result = scheduler.Run(graph);
   if (!result)
-    return abort_workspace();
+    return false;
   set<string> failed_schemas;
   for (const auto& unit : result->failed_units) {
     const auto& owners = unit_owners.at(unit);
     failed_schemas.insert(owners.begin(), owners.end());
   }
-  for (const auto& schema : prepared_schemas) {
-    if (failed_schemas.count(schema.first))
+  for (const auto& schema_id : active_schema_ids) {
+    if (failed_schemas.count(schema_id))
       ++failure;
     else
       ++success;
-    RewriteCompiler compiler(schema.first, schema.second.get(), deployer);
-    if (!compiler.Compile())
-      LOG(WARNING) << "rewrite data for schema '" << schema.first
-                   << "' was not updated.";
   }
-  if (rewrite_workspace_started) {
-    Rewriter::ReleaseStagesForDeployment();
-    if (!RewriteCompiler::FinalizeWorkspace(active_schema_ids, deployer)) {
-      LOG(WARNING) << "failed to finalize shared rewrite store.";
-      if (!RewriteCompiler::AbortWorkspace(deployer)) {
-        LOG(WARNING) << "failed to roll back shared rewrite store.";
-      }
-    }
-  }
+  RewriteResource::ReleaseForDeployment();
 
   LOG(INFO) << "finished updating schemas: " << success << " success, "
             << failure << " failure.";
@@ -493,12 +512,18 @@ bool SchemaUpdate::Run(Deployer* deployer) {
       DictCompiler::CompileDictionaries(compiled_schema, options);
   const bool auxiliary_ok = DictCompiler::CompileAuxiliary(compiled_schema);
   config.reset(Config::Require("schema")->Create(schema_id));
-  RewriteCompiler rewrite_compiler(schema_id, config.get(), deployer);
-  if (!rewrite_compiler.Compile()) {
-    LOG(WARNING) << "rewrite data for schema '" << schema_id
-                 << "' was not updated.";
+  RewriteResource::ReleaseForDeployment();
+  RewriteCompiler rewrite_compiler(deployer);
+  vector<RewriteCompiler::Spec> rewrites;
+  bool rewrites_ok = rewrite_compiler.ReadSpecs(config.get(), &rewrites);
+  if (rewrites_ok) {
+    for (const auto& spec : rewrites) {
+      if (!RewriteCompiler::Compile(spec, deployer))
+        rewrites_ok = false;
+    }
   }
-  return dictionaries_ok && auxiliary_ok;
+  RewriteResource::ReleaseForDeployment();
+  return dictionaries_ok && auxiliary_ok && rewrites_ok;
 }
 
 ConfigFileUpdate::ConfigFileUpdate(TaskInitializer arg) {

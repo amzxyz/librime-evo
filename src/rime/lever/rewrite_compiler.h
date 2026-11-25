@@ -7,6 +7,7 @@
 
 #include <rime_api.h>
 #include <rime/common.h>
+#include <rime/dict/rewrite_store.h>
 
 namespace rime {
 
@@ -15,19 +16,35 @@ class Deployer;
 
 class RIME_DLL RewriteCompiler {
  public:
-  // Compiles native file stages and shared presets into reusable store stages.
-  RewriteCompiler(const string& schema_id, Config* config, Deployer* deployer);
+  struct SourceFile {
+    string declared_name;
+    path resolved_path;
+  };
+  struct Stage {
+    string name;
+    string key_xlit;
+    vector<SourceFile> files;
+  };
+  struct Spec {
+    string name;
+    vector<Stage> stages;
+    vector<RewriteStageId> ids;
+    vector<string> aliases;
+    uint64_t estimated_memory = 0;
+  };
 
-  bool Compile();
-  static bool BeginWorkspace(Deployer* deployer);
-  static bool AbortWorkspace(Deployer* deployer);
-  static bool FinalizeWorkspace(const vector<string>& schema_ids,
-                                Deployer* deployer);
+  explicit RewriteCompiler(Deployer* deployer) : deployer_(deployer) {}
+  bool ReadSpecs(Config* config, vector<Spec>* specs);
+  static bool Compile(const Spec& spec, Deployer* deployer);
 
  private:
-  string schema_id_;
-  Config* config_;
+  struct CachedStage {
+    string key_xlit;
+    vector<path> files;
+    RewriteStageId id;
+  };
   Deployer* deployer_;
+  vector<CachedStage> stage_cache_;
 };
 
 }  // namespace rime

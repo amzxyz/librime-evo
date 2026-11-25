@@ -6,13 +6,10 @@
 #define RIME_REWRITE_STORE_H_
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
-
+#include <mutex>
 #include <rime_api.h>
 #include <rime/common.h>
-#include <rime/dict/rewrite_pack.h>
+#include <rime/dict/rewrite_stage.h>
 
 namespace rime {
 
@@ -24,66 +21,51 @@ struct RewriteStageId {
   bool operator==(const RewriteStageId& other) const {
     return high == other.high && low == other.low;
   }
-  bool operator!=(const RewriteStageId& other) const {
-    return !(*this == other);
-  }
 };
 
-// One rewriter section may bind to an ordered sequence of shared stages.
-// Order and duplicates in |stages| are semantic.
-struct RewriteStageBinding {
-  string name;
-  vector<RewriteStageId> stages;
-};
-
+// One immutable named resource; the index contains only an ordered stage
+// sequence, never schema ids or filter instance names.
 class RIME_DLL RewriteStore {
  public:
-  ~RewriteStore();
+  static string FileName(const string& name);
+  static an<const RewriteStore> Open(const path& file_path);
+  static bool Build(const path& file_path,
+                    const vector<RewriteStageId>& ids,
+                    const function<bool(size_t, RewriteStageData*)>& load,
+                    bool force = false,
+                    const vector<path>& reusable = {});
 
-  static std::shared_ptr<RewriteStore> OpenCached(const path& file_path);
+  bool Lookup(std::string_view text, vector<string>* values) const;
+  bool LookupWithPreedit(std::string_view text,
+                         vector<RewriteResult>* values) const;
+  bool ConvertSentence(std::string_view text,
+                       string* output,
+                       vector<RewriteSentenceState>* states = nullptr) const;
 
-  bool FindStageSequence(const string& schema_id,
-                         const string& section_name,
-                         vector<RewriteStageId>* stage_ids) const;
-  std::shared_ptr<const RewritePack> OpenStage(
-      const RewriteStageId& stage_id) const;
+  size_t stage_count() const { return stages_.size(); }
   uint64_t generation() const { return generation_; }
 
  private:
-  class Impl;
-
-  explicit RewriteStore(const path& file_path);
-  bool Open();
-
-  path file_path_;
+  vector<an<const RewriteStage>> stages_;
   uint64_t generation_ = 0;
-  std::unique_ptr<Impl> impl_;
 };
 
-class RIME_DLL RewriteStoreWriter {
+// Shared lazy resource slot. Active translations pin an immutable snapshot;
+// deployment clears slots before replacing files, without knowing any gear.
+class RIME_DLL RewriteResource {
  public:
-  explicit RewriteStoreWriter(const path& file_path);
-  ~RewriteStoreWriter();
-
-  bool Open();
-  bool BeginWorkspace();
-  bool AbortWorkspace();
-
-  // Shared workspace failure propagation: once any schema compilation marks
-  // the deployment failed, CommitWorkspace() must refuse a partial commit.
-  void MarkWorkspaceFailed();
-  bool WorkspaceFailed() const;
-
-  bool HasStage(const RewriteStageId& stage_id) const;
-  bool AppendStage(const RewriteStageId& stage_id, RewriteStageData stage);
-  bool CommitSchema(const string& schema_id,
-                    const vector<RewriteStageBinding>& bindings);
-  bool RetainSchemas(const vector<string>& schema_ids);
-  bool CommitWorkspace();
+  static an<RewriteResource> Require(const string& name);
+  static void ReleaseForDeployment();
+  an<const RewriteStore> Acquire();
 
  private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+  RewriteResource(path staging, path prebuilt, string file_name);
+  path staging_;
+  path prebuilt_;
+  string file_name_;
+  std::mutex mutex_;
+  bool attempted_ = false;
+  an<const RewriteStore> store_;
 };
 
 }  // namespace rime

@@ -2,12 +2,13 @@
 // Copyright RIME Developers
 // Distributed under the BSD License
 //
-#ifndef RIME_REWRITE_PACK_H_
-#define RIME_REWRITE_PACK_H_
+#ifndef RIME_REWRITE_STAGE_H_
+#define RIME_REWRITE_STAGE_H_
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -107,10 +108,10 @@ struct RewriteSentenceMetrics {
 
 class RewriteStore;
 
-// One RewritePack is exactly one immutable, memory-mapped rewrite stage.
-class RIME_DLL RewritePack {
+// One RewriteStage is exactly one immutable, memory-mapped rewrite stage.
+class RIME_DLL RewriteStage {
  public:
-  ~RewritePack();
+  ~RewriteStage();
 
   bool Lookup(std::string_view text, vector<string>* values) const;
   bool LookupWithPreedit(std::string_view text,
@@ -125,20 +126,22 @@ class RIME_DLL RewritePack {
   friend class RewriteStore;
   class Impl;
 
-  RewritePack(const path& file_path, uint64_t offset, uint64_t size);
+  RewriteStage(an<const char> mapping, uint64_t offset, uint64_t size);
+  static an<const char> MapFile(const path& file_path, uint64_t* size);
   bool Open();
 
-  path file_path_;
+  an<const char> mapping_;
   uint64_t offset_ = 0;
   uint64_t size_ = 0;
   std::unique_ptr<Impl> impl_;
 };
 
-class RIME_DLL RewritePackBuilder {
+class RIME_DLL RewriteStageBuilder {
  public:
-  bool Build(const path& output_path, const RewriteStageData& stage) const;
+  // Write one stage at the current (4-byte aligned) stream position.
+  bool Build(std::ostream* out, const RewriteStageData& stage) const;
 };
 
 }  // namespace rime
 
-#endif  // RIME_REWRITE_PACK_H_
+#endif  // RIME_REWRITE_STAGE_H_

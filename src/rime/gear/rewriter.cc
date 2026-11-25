@@ -5,7 +5,6 @@
 #include <rime/gear/rewriter.h>
 
 #include <algorithm>
-#include <mutex>
 #include <set>
 #include <utility>
 
@@ -15,30 +14,12 @@
 #include <rime/config.h>
 #include <rime/context.h>
 #include <rime/engine.h>
-#include <rime/resource.h>
 #include <rime/schema.h>
 #include <rime/service.h>
 #include <rime/translation.h>
-#include <rime/dict/rewrite_pack.h>
 
 namespace rime {
 namespace {
-
-void AppendUnique(string&& value, vector<string>* values) {
-  if (std::find(values->begin(), values->end(), value) == values->end()) {
-    values->push_back(std::move(value));
-  }
-}
-
-void AppendUnique(RewriteResult&& value, vector<RewriteResult>* values) {
-  const auto duplicate =
-      std::find_if(values->begin(), values->end(), [&](const auto& item) {
-        return item.value == value.value && item.preedit == value.preedit;
-      });
-  if (duplicate == values->end()) {
-    values->push_back(std::move(value));
-  }
-}
 
 void ReadStringList(Config* config, const string& key, vector<string>* values) {
   values->clear();
@@ -59,24 +40,6 @@ void ReadStringList(Config* config, const string& key, vector<string>* values) {
     }
   }
 }
-
-std::mutex& RewriterRegistryMutex() {
-  static std::mutex mutex;
-  return mutex;
-}
-
-std::set<Rewriter*>& RewriterRegistry() {
-  static std::set<Rewriter*> registry;
-  return registry;
-}
-
-path ResolveStorePath() {
-  the<ResourceResolver> resolver(
-      Service::instance().CreateDeployedResourceResolver(
-          {"rewrite_pack", "", ".rwp"}));
-  return resolver ? resolver->ResolvePath("rewriter") : path();
-}
-
 }  // namespace
 
 class RewriterTranslation : public PrefetchTranslation {
@@ -154,7 +117,7 @@ class RewriterAbbrevTranslation : public Translation {
 
  private:
   void BuildInjectedCandidates() {
-    if (state_->stages.empty() || !context_ || context_->input().empty()) {
+    if (!context_ || context_->input().empty()) {
       return;
     }
 
@@ -285,11 +248,6 @@ Rewriter::Rewriter(const Ticket& ticket) : Filter(ticket), TagMatching(ticket) {
   }
   LoadConfig();
 
-  if (engine_ && engine_->schema()) {
-    schema_id_ = engine_->schema()->schema_id();
-    store_path_ = ResolveStorePath();
-  }
-
   if (options_.enable_sentence && engine_ && engine_->context()) {
     Context* context = engine_->context();
     commit_connection_ = context->commit_notifier().connect(
@@ -303,9 +261,6 @@ Rewriter::Rewriter(const Ticket& ticket) : Filter(ticket), TagMatching(ticket) {
           }
         });
   }
-
-  std::lock_guard<std::mutex> lock(RewriterRegistryMutex());
-  RewriterRegistry().insert(this);
 }
 
 Rewriter::~Rewriter() {
@@ -313,23 +268,6 @@ Rewriter::~Rewriter() {
   abort_connection_.disconnect();
   update_connection_.disconnect();
   ClearSentenceCache();
-
-  std::lock_guard<std::mutex> lock(RewriterRegistryMutex());
-  RewriterRegistry().erase(this);
-}
-
-void Rewriter::ReleaseStagesForDeployment() {
-  std::lock_guard<std::mutex> registry_lock(RewriterRegistryMutex());
-  for (Rewriter* rewriter : RewriterRegistry()) {
-    if (!rewriter) {
-      continue;
-    }
-    std::lock_guard<std::mutex> state_lock(rewriter->runtime_state_mutex_);
-    std::atomic_store_explicit(&rewriter->runtime_state_,
-                               std::shared_ptr<const RuntimeState>(),
-                               std::memory_order_release);
-    rewriter->runtime_state_load_attempted_ = false;
-  }
 }
 
 void Rewriter::LoadConfig() {
@@ -337,6 +275,12 @@ void Rewriter::LoadConfig() {
     return;
   }
   Config* config = engine_->schema()->config();
+  string data;
+  if (config->GetString(name_space_ + "/data", &data))
+    resource_ = RewriteResource::Require(data);
+  if (!resource_)
+    LOG(WARNING) << "rewriter@" << name_space_
+                 << " has no valid data resource.";
 
   const auto option_item = config->GetItem(name_space_ + "/option");
   if (auto value = As<ConfigValue>(option_item)) {
@@ -429,58 +373,7 @@ bool Rewriter::Active() const {
 }
 
 std::shared_ptr<const Rewriter::RuntimeState> Rewriter::EnsureState() {
-  auto state =
-      std::atomic_load_explicit(&runtime_state_, std::memory_order_acquire);
-  if (state) {
-    return state;
-  }
-
-  std::lock_guard<std::mutex> lock(runtime_state_mutex_);
-  state = std::atomic_load_explicit(&runtime_state_, std::memory_order_acquire);
-  if (state) {
-    return state;
-  }
-  if (runtime_state_load_attempted_ || schema_id_.empty() ||
-      store_path_.empty()) {
-    return nullptr;
-  }
-  runtime_state_load_attempted_ = true;
-
-  auto store = RewriteStore::OpenCached(store_path_);
-  if (!store) {
-    LOG(WARNING) << "rewriter@" << name_space_
-                 << " is disabled: shared rewrite store '" << store_path_
-                 << "' could not be opened; redeploy the workspace.";
-    return nullptr;
-  }
-
-  vector<RewriteStageId> stage_ids;
-  if (!store->FindStageSequence(schema_id_, name_space_, &stage_ids)) {
-    LOG(WARNING) << "rewriter@" << name_space_ << " is disabled: schema '"
-                 << schema_id_ << "' has no deployed rewrite binding.";
-    return nullptr;
-  }
-
-  auto loaded = std::make_shared<RuntimeState>();
-  loaded->store = std::move(store);
-  loaded->stages.reserve(stage_ids.size());
-  for (const auto& stage_id : stage_ids) {
-    auto pack = loaded->store->OpenStage(stage_id);
-    if (!pack) {
-      LOG(WARNING) << "rewriter@" << name_space_
-                   << " is disabled: a deployed rewrite stage could not be "
-                      "opened.";
-      return nullptr;
-    }
-    loaded->stages.push_back({std::move(pack)});
-  }
-  if (loaded->stages.empty()) {
-    return nullptr;
-  }
-
-  state = loaded;
-  std::atomic_store_explicit(&runtime_state_, state, std::memory_order_release);
-  return state;
+  return resource_ ? resource_->Acquire() : nullptr;
 }
 
 void Rewriter::ClearSentenceCache() {
@@ -494,23 +387,22 @@ Rewriter::SentenceLane* Rewriter::PrepareSentenceLane(
     size_t candidate_rank,
     size_t segment_start,
     bool has_segment_range) const {
-  if (!options_.enable_sentence || candidate_rank >= kSentenceCacheLanes ||
-      !state.store) {
+  if (!options_.enable_sentence || candidate_rank >= kSentenceCacheLanes) {
     return nullptr;
   }
 
   auto& lane = sentence_lanes_[candidate_rank];
-  const uint64_t generation = state.store->generation();
+  const uint64_t generation = state.generation();
   if (!lane.valid || lane.store_generation != generation ||
       lane.has_segment_range != has_segment_range ||
       (has_segment_range && lane.segment_start != segment_start) ||
-      lane.stages.size() != state.stages.size()) {
+      lane.stages.size() != state.stage_count()) {
     lane.Reset();
     lane.valid = true;
     lane.has_segment_range = has_segment_range;
     lane.segment_start = segment_start;
     lane.store_generation = generation;
-    lane.stages.resize(state.stages.size());
+    lane.stages.resize(state.stage_count());
   }
   return &lane;
 }
@@ -521,141 +413,27 @@ bool Rewriter::Rewrite(const RuntimeState& state,
                        size_t candidate_rank,
                        size_t segment_start,
                        bool has_segment_range) const {
-  if (!values) {
+  if (!options_.enable_sentence)
+    return state.Lookup(text, values);
+  if (!values)
     return false;
-  }
   values->clear();
-  if (state.stages.empty()) {
-    return false;
-  }
-
-  if (options_.enable_sentence) {
-    SentenceLane* lane = PrepareSentenceLane(state, candidate_rank,
-                                             segment_start, has_segment_range);
-    std::string_view current = text;
-    bool matched = false;
-
-    if (lane) {
-      for (size_t i = 0; i < state.stages.size(); ++i) {
-        auto& sentence_state = lane->stages[i];
-        if (state.stages[i].pack->ConvertSentenceIncremental(current,
-                                                             &sentence_state)) {
-          current = sentence_state.output;
-          matched = true;
-        }
-        // A miss is a no-op for this stage. The current text must still reach
-        // later stages in a preset such as s2t -> t2hk.
-      }
-    } else {
-      string current_storage(text);
-      for (const auto& loaded : state.stages) {
-        string rewritten;
-        if (loaded.pack->ConvertSentence(current_storage, &rewritten)) {
-          current_storage = std::move(rewritten);
-          matched = true;
-        }
-      }
-      if (!matched) {
-        return false;
-      }
-      values->push_back(std::move(current_storage));
-      return true;
-    }
-
-    if (!matched) {
-      if (lane && lane->RetainedBytes() > kMaxSentenceCacheBytes) {
-        lane->Reset();
-      }
-      return false;
-    }
-
-    values->emplace_back(current);
-    if (lane && lane->RetainedBytes() > kMaxSentenceCacheBytes) {
-      lane->Reset();
-    }
-    return true;
-  }
-
-  if (state.stages.size() == 1) {
-    return state.stages.front().pack->Lookup(text, values);
-  }
-
-  vector<string> current;
-  bool matched = state.stages.front().pack->Lookup(text, &current);
-  if (!matched) {
-    current.emplace_back(text);
-  }
-
-  for (size_t i = 1; i < state.stages.size(); ++i) {
-    vector<string> next;
-    next.reserve(current.size());
-    vector<string> rewritten;
-    for (auto& value : current) {
-      if (state.stages[i].pack->Lookup(value, &rewritten)) {
-        matched = true;
-        for (auto& mapped : rewritten) {
-          AppendUnique(std::move(mapped), &next);
-        }
-      } else {
-        AppendUnique(std::move(value), &next);
-      }
-    }
-    current.swap(next);
-  }
-
-  if (!matched) {
-    return false;
-  }
-  *values = std::move(current);
-  return true;
+  auto* lane = PrepareSentenceLane(state, candidate_rank, segment_start,
+                                   has_segment_range);
+  string output;
+  const bool matched =
+      state.ConvertSentence(text, &output, lane ? &lane->stages : nullptr);
+  if (lane && lane->RetainedBytes() > kMaxSentenceCacheBytes)
+    lane->Reset();
+  if (matched)
+    values->push_back(std::move(output));
+  return matched;
 }
 
 bool Rewriter::RewriteWithPreedit(const RuntimeState& state,
                                   std::string_view text,
                                   vector<RewriteResult>* values) const {
-  if (!values) {
-    return false;
-  }
-  values->clear();
-  if (state.stages.empty()) {
-    return false;
-  }
-
-  if (state.stages.size() == 1) {
-    return state.stages.front().pack->LookupWithPreedit(text, values);
-  }
-
-  vector<RewriteResult> current;
-  bool matched = state.stages.front().pack->LookupWithPreedit(text, &current);
-  if (!matched) {
-    current.push_back({string(text), string()});
-  }
-
-  for (size_t i = 1; i < state.stages.size(); ++i) {
-    vector<RewriteResult> next;
-    next.reserve(current.size());
-    vector<RewriteResult> rewritten;
-    for (auto& value : current) {
-      if (state.stages[i].pack->LookupWithPreedit(value.value, &rewritten)) {
-        matched = true;
-        for (auto& mapped : rewritten) {
-          if (!value.preedit.empty()) {
-            mapped.preedit = value.preedit;
-          }
-          AppendUnique(std::move(mapped), &next);
-        }
-      } else {
-        AppendUnique(std::move(value), &next);
-      }
-    }
-    current.swap(next);
-  }
-
-  if (!matched) {
-    return false;
-  }
-  *values = std::move(current);
-  return true;
+  return state.LookupWithPreedit(text, values);
 }
 
 const string& Rewriter::CandidateType(const an<Candidate>& candidate) const {
@@ -700,7 +478,7 @@ bool Rewriter::Transform(const RuntimeState& state,
                          bool has_segment_range) const {
   // Apply() already gates the translation on the current option state. Avoid
   // querying Context::get_option() again for every candidate in the hot path.
-  if (!candidate || !result || state.stages.empty()) {
+  if (!candidate || !result) {
     return false;
   }
   if (options_.excluded_types.find(candidate->type()) !=
@@ -779,5 +557,4 @@ an<Translation> Rewriter::Apply(an<Translation> translation,
   return New<RewriterTranslation>(translation, this, std::move(state),
                                   segment_start, has_segment_range);
 }
-
 }  // namespace rime

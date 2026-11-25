@@ -6,9 +6,7 @@
 #define RIME_REWRITER_H_
 
 #include <array>
-#include <atomic>
 #include <memory>
-#include <mutex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -31,10 +29,6 @@ class Rewriter : public Filter, public TagMatching {
   an<Translation> Apply(an<Translation> translation,
                         CandidateList* candidates) override;
   bool AppliesToSegment(Segment* segment) override;
-
-  // Maintenance-mode deployment drops all Rewriter-owned mappings while
-  // keeping sessions alive. Rewriters reopen lazily after deployment.
-  static void ReleaseStagesForDeployment();
 
  private:
   friend class RewriterTranslation;
@@ -60,14 +54,7 @@ class Rewriter : public Filter, public TagMatching {
 
   void LoadConfig();
   bool Active() const;
-  struct LoadedStage {
-    std::shared_ptr<const RewritePack> pack;
-  };
-  struct RuntimeState {
-    std::shared_ptr<const RewriteStore> store;
-    vector<LoadedStage> stages;
-  };
-
+  using RuntimeState = RewriteStore;
   std::shared_ptr<const RuntimeState> EnsureState();
   bool Rewrite(const RuntimeState& state,
                std::string_view text,
@@ -125,11 +112,7 @@ class Rewriter : public Filter, public TagMatching {
                                     bool has_segment_range) const;
 
   Options options_;
-  string schema_id_;
-  path store_path_;
-  std::shared_ptr<const RuntimeState> runtime_state_;
-  std::mutex runtime_state_mutex_;
-  bool runtime_state_load_attempted_ = false;
+  an<RewriteResource> resource_;
 
   mutable std::array<SentenceLane, kSentenceCacheLanes> sentence_lanes_;
   connection commit_connection_;
