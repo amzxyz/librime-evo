@@ -125,8 +125,9 @@ bool AuxiliaryBuildCompiler::Collect(const BuildRequest& request,
       auto shared = New<Groups>();
       const auto name = source.substr(0, source.size() - 5);
       const auto bytes = DictCompiler::EstimateMemory(name, true);
-      CompileUnit unit(id, bytes, [source, shared]() {
-        return DictCompiler::CompileAuxiliary(source, *shared);
+      const bool rebuild = request.rebuild;
+      CompileUnit unit(id, bytes, [source, shared, rebuild]() {
+        return DictCompiler::CompileAuxiliary(source, *shared, rebuild);
       });
       const size_t index = plan->AddUnit(std::move(unit), request.schema_id);
       source_build = sources_.emplace(source, SourceBuild{shared, index}).first;
