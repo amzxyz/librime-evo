@@ -29,7 +29,6 @@ struct node_t {
 const int32_t kTypeIsCorrectionMask = 1 << 30;
 const int32_t kSpellingTypeMask = ~kTypeIsCorrectionMask;
 
-
 struct CodeChoiceData {
   vector<uint32_t> words;
   vector<char> strings;
@@ -325,8 +324,8 @@ bool Prism::Build(const Syllabary& syllabary,
   // Reserve the actual tips and choice data before mapping the file.
   // Growing a mapped file would invalidate previously allocated pointers.
   size_t estimated_map_size =
-      num_spellings * 12 +
-      map_size * (4 + sizeof(prism::SpellingDescriptor)) + tips_bytes;
+      num_spellings * 12 + map_size * (4 + sizeof(prism::SpellingDescriptor)) +
+      tips_bytes;
   const size_t choice_bytes =
       choice_data.words.size() * sizeof(uint32_t) + choice_data.strings.size();
   const size_t kReservedSize = 1024;

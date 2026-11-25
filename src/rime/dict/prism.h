@@ -63,9 +63,7 @@ class CodeChoiceView {
       : offsets_(offsets), strings_(strings), size_(size) {}
   size_t size() const { return size_; }
   bool empty() const { return size_ == 0; }
-  std::string_view operator[](size_t i) const {
-    return strings_ + offsets_[i];
-  }
+  std::string_view operator[](size_t i) const { return strings_ + offsets_[i]; }
 
  private:
   const uint32_t* offsets_ = nullptr;
