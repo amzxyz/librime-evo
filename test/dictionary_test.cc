@@ -259,3 +259,57 @@ TEST_F(RimeDictionaryTest, SkipDropsCachedEntryAndRebuildsHeap) {
   EXPECT_FALSE(oversized.Skip(std::numeric_limits<size_t>::max()));
   EXPECT_TRUE(oversized.exhausted());
 }
+
+TEST(CompactDictionaryTest, CompilesAndQueriesAllSingleSyllables) {
+  rime::the<rime::Dictionary> dict(new rime::Dictionary(
+      "compact_dictionary_test", {},
+      {rime::New<rime::Table>(rime::path{"compact_dictionary_test.table.bin"})},
+      rime::New<rime::Prism>(rime::path{"compact_dictionary_test.prism.bin"})));
+  dict->Remove();
+  rime::DictCompiler compiler(dict.get());
+  ASSERT_TRUE(compiler.Compile(rime::path()));
+  ASSERT_TRUE(dict->Load());
+
+  rime::DictEntryIterator entries;
+  ASSERT_EQ(1u, dict->LookupWords(&entries, "a", false));
+  ASSERT_EQ(2u, entries.entry_count());
+  ASSERT_FALSE(entries.exhausted());
+  EXPECT_EQ("one", entries.Peek()->text);
+  ASSERT_TRUE(entries.Next());
+  EXPECT_EQ("two", entries.Peek()->text);
+  EXPECT_FALSE(entries.Next());
+
+  ASSERT_EQ(1u, dict->LookupWords(&entries, "b", false));
+  ASSERT_FALSE(entries.exhausted());
+  EXPECT_EQ("three", entries.Peek()->text);
+
+  dict->Remove();
+}
+
+TEST(CompactDictionaryTest, CompilesAllSingleSyllablePack) {
+  rime::the<rime::Dictionary> dict(new rime::Dictionary(
+      "compact_dictionary_test", {"compact_dictionary_pack_test"},
+      {rime::New<rime::Table>(
+           rime::path{"compact_dictionary_test_pack.table.bin"}),
+       rime::New<rime::Table>(
+           rime::path{"compact_dictionary_pack_test.table.bin"})},
+      rime::New<rime::Prism>(
+          rime::path{"compact_dictionary_test_pack.prism.bin"})));
+  dict->Remove();
+  rime::DictCompiler compiler(dict.get());
+  ASSERT_TRUE(compiler.Compile(rime::path()));
+  ASSERT_TRUE(dict->Load());
+
+  rime::DictEntryIterator entries;
+  ASSERT_EQ(1u, dict->LookupWords(&entries, "a", false));
+  ASSERT_EQ(3u, entries.entry_count());
+  EXPECT_FALSE(entries.exhausted());
+  EXPECT_EQ("one", entries.Peek()->text);
+  ASSERT_TRUE(entries.Next());
+  EXPECT_EQ("two", entries.Peek()->text);
+  ASSERT_TRUE(entries.Next());
+  EXPECT_EQ("four", entries.Peek()->text);
+  EXPECT_FALSE(entries.Next());
+
+  dict->Remove();
+}

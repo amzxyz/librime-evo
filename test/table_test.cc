@@ -5,6 +5,7 @@
 // 2011-07-03 GONG Chen <chen.sst@gmail.com>
 //
 #include <gtest/gtest.h>
+#include <cstring>
 #include <rime/algo/syllabifier.h>
 #include <rime/dict/table.h>
 
@@ -44,6 +45,108 @@ class InspectableTable : public rime::Table {
   bool has_builder() const { return bool(string_table_builder_); }
 };
 #endif
+
+TEST(TableBuilder, CompactSingleSyllableOutputMatchesVocabulary) {
+  auto compare_outputs = [](bool sort_by_weight, const char* suffix) {
+    const rime::path vocabulary_path{std::string("table_vocabulary_") + suffix +
+                                     ".bin"};
+    const rime::path compact_path{std::string("table_compact_") + suffix +
+                                  ".bin"};
+    rime::Table vocabulary_table(vocabulary_path);
+    rime::Table compact_table(compact_path);
+    vocabulary_table.Remove();
+    compact_table.Remove();
+
+    rime::Syllabary syllabary{"a", "b", "c"};
+    rime::Vocabulary vocabulary;
+    rime::Code a_code;
+    a_code.push_back(0);
+    rime::Code b_code;
+    b_code.push_back(1);
+    vocabulary[0].entries.push_back({"first", a_code, 1.0});
+    vocabulary[0].entries.push_back({"second", a_code, 2.0});
+    vocabulary[1].entries.push_back({"third", b_code, 3.0});
+
+    rime::CompactDictEntryList compact;
+    compact.text = "firstsecondthird";
+    compact.entries = {{0, 5, 0, 1.0}, {5, 6, 0, 2.0}, {11, 5, 1, 3.0}};
+    compact.page_offsets = {0, 2, 3, 3};
+    if (sort_by_weight) {
+      vocabulary.SortHomophones();
+      std::swap(compact.entries[0], compact.entries[1]);
+    }
+
+    ASSERT_TRUE(vocabulary_table.Build(syllabary, vocabulary, 3, 17));
+    ASSERT_TRUE(compact_table.Build(syllabary, compact, 3, 17));
+    ASSERT_TRUE(vocabulary_table.Save());
+    ASSERT_TRUE(compact_table.Save());
+    ASSERT_TRUE(vocabulary_table.Load());
+    ASSERT_TRUE(compact_table.Load());
+
+    // Keep the Rime-owned binary layout identical. MARISA 0.3.1's
+    // FlatVector can serialize unused, uninitialized bits on 32-bit builds,
+    // so comparing the entire opaque trie image is not a portable test.
+    const auto* vocabulary_meta = vocabulary_table.metadata();
+    const auto* compact_meta = compact_table.metadata();
+    ASSERT_TRUE(vocabulary_meta);
+    ASSERT_TRUE(compact_meta);
+    ASSERT_TRUE(vocabulary_meta->string_table);
+    ASSERT_TRUE(compact_meta->string_table);
+    const auto vocabulary_index_size =
+        vocabulary_meta->string_table.get() -
+        reinterpret_cast<const char*>(vocabulary_meta);
+    const auto compact_index_size = compact_meta->string_table.get() -
+                                    reinterpret_cast<const char*>(compact_meta);
+    ASSERT_GT(vocabulary_index_size, 0);
+    ASSERT_EQ(vocabulary_index_size, compact_index_size);
+    ASSERT_EQ(vocabulary_table.file_size(), compact_table.file_size());
+    EXPECT_EQ(0, std::memcmp(vocabulary_meta, compact_meta,
+                             static_cast<size_t>(vocabulary_index_size)));
+    EXPECT_EQ(17u, compact_meta->dict_file_checksum);
+    EXPECT_EQ(3u, compact_meta->num_syllables);
+    EXPECT_EQ(3u, compact_meta->num_entries);
+
+    // Verify every persisted entry, including order, weights and the empty
+    // syllable page, rather than treating an opaque trie byte as a word.
+    using WeightedText = std::pair<rime::string, float>;
+    std::vector<std::vector<WeightedText>> expected{
+        {{"first", 1.0f}, {"second", 2.0f}}, {{"third", 3.0f}}, {}};
+    if (sort_by_weight)
+      std::swap(expected[0][0], expected[0][1]);
+    for (rime::SyllableId id = 0; id < 3; ++id) {
+      EXPECT_EQ(vocabulary_table.GetSyllableById(id),
+                compact_table.GetSyllableById(id));
+      EXPECT_EQ(rime::string(1, static_cast<char>('a' + id)),
+                compact_table.GetSyllableById(id));
+      auto ordinary = vocabulary_table.QueryWords(id);
+      auto compressed = compact_table.QueryWords(id);
+      ASSERT_EQ(expected[id].size(), ordinary.remaining());
+      ASSERT_EQ(expected[id].size(), compressed.remaining());
+      for (const auto& [text, weight] : expected[id]) {
+        ASSERT_FALSE(ordinary.exhausted());
+        ASSERT_FALSE(compressed.exhausted());
+        ASSERT_TRUE(ordinary.entry());
+        ASSERT_TRUE(compressed.entry());
+        EXPECT_EQ(text, vocabulary_table.GetEntryText(*ordinary.entry()));
+        EXPECT_EQ(text, compact_table.GetEntryText(*compressed.entry()));
+        EXPECT_FLOAT_EQ(weight, ordinary.entry()->weight);
+        EXPECT_FLOAT_EQ(weight, compressed.entry()->weight);
+        ordinary.Next();
+        compressed.Next();
+      }
+      EXPECT_TRUE(ordinary.exhausted());
+      EXPECT_TRUE(compressed.exhausted());
+    }
+
+    vocabulary_table.Close();
+    compact_table.Close();
+
+    vocabulary_table.Remove();
+    compact_table.Remove();
+  };
+  compare_outputs(false, "original");
+  compare_outputs(true, "sorted");
+}
 
 void RimeTableTest::PrepareSampleVocabulary(rime::Syllabary& syll,
                                             rime::Vocabulary& voc) {
