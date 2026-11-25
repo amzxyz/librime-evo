@@ -176,8 +176,11 @@ bool InstallationUpdate::Run(Deployer* deployer) {
 static bool DeploySchemas(Deployer* deployer,
                           DeploymentResult* result,
                           bool verbose = false) {
-  if (!MaybeCreateDirectory(deployer->staging_dir))
+  if (!MaybeCreateDirectory(deployer->staging_dir)) {
+    LOG(ERROR) << "cannot prepare deployment directory: "
+               << deployer->staging_dir;
     return false;
+  }
   BuildPlan plan(deployer, verbose, verbose);
   vector<string> prepared;
   the<ResourceResolver> resolver(Service::instance().CreateResourceResolver(
@@ -192,25 +195,37 @@ static bool DeploySchemas(Deployer* deployer,
       continue;
     }
     ConfigFileUpdate update(schema_id + ".schema.yaml", "schema/version");
-    if (!update.Run(deployer))
+    if (!update.Run(deployer)) {
+      LOG(ERROR) << "schema '" << schema_id
+                 << "': configuration compilation failed.";
       continue;
+    }
     const path compiled = compiled_resolver->ResolvePath(schema_id);
     Config config;
     string compiled_id;
     if (!config.LoadFromFile(compiled) ||
         !config.GetString("schema/schema_id", &compiled_id) ||
         compiled_id != schema_id) {
-      LOG(ERROR) << "invalid compiled schema: " << schema_id;
+      LOG(ERROR) << "invalid compiled schema '" << schema_id << "' at "
+                 << compiled;
       continue;
     }
-    if (!PrismConfig::ValidateReferences(&config) ||
-        !plan.Collect(schema_id, &config, compiled))
+    if (!PrismConfig::ValidateReferences(&config)) {
+      LOG(ERROR) << "schema '" << schema_id
+                 << "': invalid prism or input_types configuration.";
       return false;
+    }
+    if (!plan.Collect(schema_id, &config, compiled)) {
+      LOG(ERROR) << "schema '" << schema_id << "': build planning failed.";
+      return false;
+    }
     prepared.push_back(schema_id);
   }
   set<string> failed;
-  if (!plan.Run(&failed))
+  if (!plan.Run(&failed)) {
+    LOG(ERROR) << "resource compilation batch failed.";
     return false;
+  }
   for (const auto& id : prepared) {
     if (!failed.count(id))
       result->successful_schemas.insert(id);
@@ -227,8 +242,10 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
       [&](vector<string>* schema_ids) {
         LoadModules(kDeployerModules);
         LOG(INFO) << "updating workspace.";
-        if (!ConfigFileUpdate("default.yaml", "config_version").Run(deployer))
+        if (!ConfigFileUpdate("default.yaml", "config_version").Run(deployer)) {
+          LOG(ERROR) << "workspace: default.yaml compilation failed.";
           return false;
+        }
         SymlinkingPrebuiltDictionaries().Run(deployer);
 
         the<ResourceResolver> resolver(
@@ -258,9 +275,13 @@ bool WorkspaceUpdate::Run(Deployer* deployer) {
           return false;
         the<Config> user_config(Config::Require("user_config")->Create("user"));
         // TODO: store as 64-bit number to avoid the year 2038 problem
-        return user_config &&
-               user_config->SetInt("var/last_build_time", (int)time(NULL)) &&
-               user_config->Save();
+        if (!user_config ||
+            !user_config->SetInt("var/last_build_time", (int)time(NULL)) ||
+            !user_config->Save()) {
+          LOG(ERROR) << "workspace: failed to save last build time.";
+          return false;
+        }
+        return true;
       });
 }
 
@@ -425,10 +446,22 @@ bool ConfigFileUpdate::Run(Deployer* deployer) {
   const auto compiled = resolver->ResolvePath(id);
   if (config.LoadFromFile(compiled) && !ConfigNeedsUpdate(&config))
     return true;
-  if (!MaybeCreateDirectory(deployer->staging_dir))
+  if (!MaybeCreateDirectory(deployer->staging_dir)) {
+    LOG(ERROR) << "cannot prepare config output directory: "
+               << deployer->staging_dir;
     return false;
-  the<Config> built(Config::Require("config_builder")->Create(file_name_));
-  return built && built->build_succeeded();
+  }
+  auto* builder = Config::Require("config_builder");
+  if (!builder) {
+    LOG(ERROR) << "config_builder is not registered for '" << file_name_ << "'.";
+    return false;
+  }
+  the<Config> built(builder->Create(file_name_));
+  if (!built || !built->build_succeeded()) {
+    LOG(ERROR) << "failed to compile configuration '" << file_name_ << "'.";
+    return false;
+  }
+  return true;
 }
 
 bool PrebuildAllSchemas::Run(Deployer* deployer) {

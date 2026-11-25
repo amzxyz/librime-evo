@@ -20,6 +20,8 @@ bool BuildPlan::Collect(const string& schema_id,
                         Config* config,
                         const path& schema_file) {
   if (!valid_ || started_ || !deployer_ || !config) {
+    LOG(ERROR) << "cannot collect build plan for schema '" << schema_id
+               << "': invalid plan or configuration.";
     valid_ = false;
     return false;
   }
@@ -38,12 +40,15 @@ bool BuildPlan::Collect(const string& schema_id,
     if (it == compilers_.end()) {
       auto* component = BuildCompiler::Require(key);
       if (!component) {
-        LOG(ERROR) << "no compiler registered for '" << key << "'.";
+        LOG(ERROR) << "schema '" << schema_id
+                   << "': no compiler registered for '" << key << "'.";
         valid_ = false;
         return false;
       }
       the<BuildCompiler> compiler(component->Create(deployer_));
       if (!compiler) {
+        LOG(ERROR) << "schema '" << schema_id
+                   << "': cannot create compiler '" << key << "'.";
         valid_ = false;
         return false;
       }
@@ -90,8 +95,10 @@ void BuildPlan::AddDependency(const string& prerequisite,
 }
 
 bool BuildPlan::Run(set<string>* failed_schemas) {
-  if (!valid_ || started_ || !failed_schemas)
+  if (!valid_ || started_ || !failed_schemas) {
+    LOG(ERROR) << "cannot run invalid or already started build plan.";
     return false;
+  }
   started_ = true;
   failed_schemas->clear();
   vector<pair<string, string>> resolved;
@@ -141,17 +148,29 @@ bool BuildPlan::Run(set<string>* failed_schemas) {
   } finish;
   for (const auto& entry : compilers_) {
     finish.prepared.push_back(entry.second.get());
-    if (!entry.second->Prepare())
+    if (!entry.second->Prepare()) {
+      LOG(ERROR) << "compiler preparation failed: " << entry.first;
       return false;
+    }
   }
   CompileScheduler scheduler;
   auto result = scheduler.Run(graph);
-  if (!result)
+  if (!result) {
+    LOG(ERROR) << "compile scheduler failed to execute build plan.";
     return false;
-  for (const auto& unit : result->failed_units) {
-    const auto& owners = owners_.at(unit);
-    failed_schemas->insert(owners.begin(), owners.end());
   }
+  auto report_failure = [&](const string& unit, const char* reason) {
+    const auto& owners = owners_.at(unit);
+    for (const auto& schema : owners) {
+      LOG(ERROR) << "schema '" << schema << "': compile unit '" << unit << "' "
+                 << reason << ".";
+      failed_schemas->insert(schema);
+    }
+  };
+  for (const auto& unit : result->failed_units)
+    report_failure(unit, "failed");
+  for (const auto& unit : result->skipped_units)
+    report_failure(unit, "skipped because a prerequisite failed");
   return finish.Finish();
 }
 

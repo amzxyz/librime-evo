@@ -38,8 +38,10 @@ bool Deployer::RunSchemaDeployment(
   } reset{deploying_schemas_};
   DeploymentResult result;
   try {
-    if (!select(&result.schema_ids))
+    if (!select(&result.schema_ids)) {
+      LOG(ERROR) << "schema deployment: selection failed.";
       return false;
+    }
   } catch (const std::exception& ex) {
     LOG(ERROR) << "schema selection failed: " << ex.what();
     return false;
@@ -48,15 +50,23 @@ bool Deployer::RunSchemaDeployment(
     return false;
   }
   try {
-    result.success = before_deploy_(this, result.schema_ids) && work(&result);
+    if (!before_deploy_(this, result.schema_ids)) {
+      LOG(ERROR) << "schema deployment: preparation observer failed.";
+    } else {
+      result.success = work(&result);
+      if (!result.success)
+        LOG(ERROR) << "schema deployment: build or finalization failed.";
+    }
   } catch (const std::exception& ex) {
     LOG(ERROR) << "schema deployment failed: " << ex.what();
   } catch (...) {
     LOG(ERROR) << "schema deployment failed.";
   }
   for (const auto& id : result.schema_ids) {
-    if (!result.successful_schemas.count(id))
+    if (!result.successful_schemas.count(id)) {
+      LOG(ERROR) << "deployment did not complete for schema '" << id << "'.";
       result.failed_schemas.insert(id);
+    }
   }
   result.success = result.success && result.failed_schemas.empty();
   after_deploy_(this, result);
