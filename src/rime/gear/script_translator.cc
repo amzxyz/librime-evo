@@ -53,6 +53,7 @@ struct SyllabifyTask {
       push;
   function<void(SyllabifyTask* task, size_t depth)> pop;
   vector<string> characters{};
+  bool require_complete_tail = false;
 };
 
 static vector<string> SplitCharacters(const string& text) {
@@ -82,6 +83,12 @@ static bool syllabify_dfs(SyllabifyTask* task,
   for (const auto* props : spellings->second) {
     if (props->end_pos > task->target_pos)
       continue;
+    // Earlier syllables may be abbreviated. Only the newly completed
+    // syllable decides whether ordinary input should outrank word AUX.
+    if (task->require_complete_tail &&
+        (props->is_correction ||
+         (depth + 1 == task->code.size() && props->type >= kAbbreviation)))
+      continue;
     if (props->auxiliary_chars && !task->characters.empty() &&
         (depth >= task->characters.size() ||
          !props->auxiliary_chars->count(task->characters[depth])))
@@ -104,46 +111,99 @@ struct DirectWordAuxiliary {
   }
 };
 
+// Keep the normal translation lazy. Only when a matching word-AUX branch
+// exists do we distinguish a complete final syllable from a weak spelling.
+// Defer weak full-span candidates only if the graph has a possible complete
+// tail, so a high-weight abbreviation cannot hide a complete match.
 class DirectWordAuxiliaryTranslation : public Translation {
  public:
-  DirectWordAuxiliaryTranslation(an<Translation> ordinary,
-                                 an<Translation> auxiliary,
-                                 size_t end)
+  DirectWordAuxiliaryTranslation(
+      an<Translation> ordinary,
+      an<Translation> auxiliary,
+      size_t end,
+      bool can_have_complete_tail,
+      function<bool(const Phrase&)> has_complete_tail)
       : ordinary_(std::move(ordinary)),
         auxiliary_(std::move(auxiliary)),
-        end_(end) {}
+        end_(end),
+        can_have_complete_tail_(can_have_complete_tail),
+        has_complete_tail_(std::move(has_complete_tail)) {}
 
   bool Next() override {
-    if (auto* current = Current())
-      current->Next();
-    set_exhausted(ordinary_->exhausted() && auxiliary_->exhausted());
+    switch (Select()) {
+      case kOrdinary:
+        ordinary_->Next();
+        break;
+      case kAuxiliary:
+        auxiliary_->Next();
+        break;
+      case kDeferred:
+        deferred_.pop_front();
+        break;
+      case kUnselected:
+        return false;
+    }
+    source_ = kUnselected;
+    set_exhausted(ordinary_->exhausted() && auxiliary_->exhausted() &&
+                  deferred_.empty());
     return !exhausted();
   }
 
   an<Candidate> Peek() override {
-    auto* current = Current();
-    return current ? current->Peek() : nullptr;
+    switch (Select()) {
+      case kOrdinary:
+        return ordinary_->Peek();
+      case kAuxiliary:
+        return auxiliary_->Peek();
+      case kDeferred:
+        return deferred_.front();
+      case kUnselected:
+        return nullptr;
+    }
+    return nullptr;
   }
 
  private:
-  Translation* Current() {
-    if (auxiliary_->exhausted())
-      return ordinary_->exhausted() ? nullptr : ordinary_.get();
-    if (!ordinary_->exhausted()) {
-      const auto candidate = ordinary_->Peek();
-      const auto phrase = As<Phrase>(Candidate::GetGenuineCandidate(candidate));
-      if (phrase && phrase->end() == end_ && phrase->is_exact_match() &&
-          phrase->entry().remaining_code_length == 0 &&
-          (phrase->type() == "phrase" || phrase->type() == "user_phrase")) {
-        return ordinary_.get();
+  enum Source { kUnselected, kOrdinary, kAuxiliary, kDeferred };
+
+  Source Select() {
+    if (source_ != kUnselected)
+      return source_;
+    if (!auxiliary_->exhausted()) {
+      if (can_have_complete_tail_) {
+        while (!ordinary_->exhausted()) {
+          auto candidate = ordinary_->Peek();
+          // ScriptTranslation emits full-span buckets before shorter ones.
+          // Never scan the rest of the normal candidate stream.
+          if (!candidate || candidate->end() != end_)
+            break;
+          const auto phrase =
+              As<Phrase>(Candidate::GetGenuineCandidate(candidate));
+          if (phrase && phrase->is_exact_match() &&
+              phrase->entry().remaining_code_length == 0 &&
+              (phrase->type() == "phrase" || phrase->type() == "user_phrase") &&
+              has_complete_tail_(*phrase)) {
+            return source_ = kOrdinary;
+          }
+          deferred_.push_back(std::move(candidate));
+          ordinary_->Next();
+        }
+        can_have_complete_tail_ = false;
       }
+      return source_ = kAuxiliary;
     }
-    return auxiliary_.get();
+    if (!deferred_.empty())
+      return source_ = kDeferred;
+    return source_ = ordinary_->exhausted() ? kUnselected : kOrdinary;
   }
 
   an<Translation> ordinary_;
   an<Translation> auxiliary_;
   size_t end_;
+  bool can_have_complete_tail_;
+  function<bool(const Phrase&)> has_complete_tail_;
+  deque<an<Candidate>> deferred_;
+  Source source_ = kUnselected;
 };
 
 }  // anonymous namespace
@@ -180,6 +240,8 @@ class ScriptSyllabifier : public PhraseSyllabifier {
   string GetPreeditString(const Phrase& cand) const;
   string GetOriginalSpelling(const Phrase& cand) const;
   bool IsCorrection(const Code& code, size_t code_length) const;
+  bool CanHaveCompleteTail() const;
+  bool HasCompleteTail(const Phrase& phrase) const;
 
   const SyllableGraph& syllable_graph() const { return syllable_graph_; }
 
@@ -224,6 +286,12 @@ class ScriptTranslation : public Translation {
     set_exhausted(true);
   }
   bool Evaluate(Dictionary* dict, UserDictionary* user_dict);
+  bool CanHaveCompleteTail() const {
+    return syllabifier_->CanHaveCompleteTail();
+  }
+  bool HasCompleteTail(const Phrase& phrase) const {
+    return syllabifier_->HasCompleteTail(phrase);
+  }
   virtual bool Next();
   virtual an<Candidate> Peek();
 
@@ -373,8 +441,13 @@ an<Translation> ScriptTranslator::Query(const string& input,
   if (!words)
     return ordinary;
   if (ordinary) {
-    words = New<DirectWordAuxiliaryTranslation>(ordinary, words,
-                                                segment.start + input.size());
+    const size_t end = segment.start + input.size();
+    const bool complete = result->CanHaveCompleteTail();
+    auto has_complete_tail = [result](const Phrase& phrase) {
+      return result->HasCompleteTail(phrase);
+    };
+    words = New<DirectWordAuxiliaryTranslation>(ordinary, words, end, complete,
+                                                std::move(has_complete_tail));
   }
   return New<DistinctTranslation>(words);
 }
@@ -601,6 +674,32 @@ size_t ScriptSyllabifier::BuildSyllableGraph(Prism& prism) {
   return syllabifier_.BuildSyllableGraph(
       input_.substr(0, input_.size() - word_auxiliary_length_), prism,
       &syllable_graph_);
+}
+
+bool ScriptSyllabifier::CanHaveCompleteTail() const {
+  if (syllable_graph_.interpreted_length != input_.size())
+    return false;
+  for (const auto& vertex : syllable_graph_.indices) {
+    for (const auto& spelling : vertex.second) {
+      for (const auto* props : spelling.second) {
+        if (props->end_pos == input_.size() && props->type < kAbbreviation &&
+            !props->is_correction)
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool ScriptSyllabifier::HasCompleteTail(const Phrase& phrase) const {
+  auto push = [](SyllabifyTask*, size_t, size_t, size_t) {};
+  auto pop = [](SyllabifyTask*, size_t) {};
+  const size_t target = phrase.end() - start_;
+  SyllabifyTask task{phrase.code(), syllable_graph_, target, push, pop};
+  task.require_complete_tail = true;
+  if (syllable_graph_.has_auxiliary)
+    task.characters = SplitCharacters(phrase.text());
+  return syllabify_dfs(&task, 0, phrase.start() - start_);
 }
 
 bool ScriptSyllabifier::IsCorrection(const Code& code,

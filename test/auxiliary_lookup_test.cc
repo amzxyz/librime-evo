@@ -930,3 +930,119 @@ translator:
   ASSERT_TRUE(context->ConfirmCurrentSelection());
   EXPECT_EQ(8u, context->composition().GetConfirmedPosition());
 }
+
+TEST_F(RimeAuxiliaryLookupTest, WordAuxiliaryRespectsCompleteTailSpelling) {
+  std::ofstream("aux_path_test.dict.yaml", std::ios::app)
+      << "再\tzai\t100\n"
+         "发\tfa\t100\n"
+         "烦\tfan\t100\n"
+         "佛\tfo\t100\n"
+         "拟在\tni zai\t10\n"
+         "你再发\tni zai fa\t100\n"
+         "你再烦\tni zai fan\t100000000\n"
+         "你在快\tni zai kuai\t100\n";
+  std::ofstream("aux_path_test_aux.yaml", std::ios::app)
+      << "拟\tfa\n拟\tfx\n拟\tfo\n";
+  database_->Close();
+  const path schema_file{"aux_path_test.schema.yaml"};
+  std::ofstream(schema_file.c_str()) << R"YAML(build:
+  dictionaries:
+    aux_path_test:
+      algebra:
+        pinyin:
+          - abbrev/^([a-z]).+$/$1/
+          - abbrev/^fan$/fa/
+        zrm:
+          - xform/^zai$/zl/
+          - xform/^fan$/fj/
+          - xform/^kuai$/ky/
+          - abbrev/^([a-z]).+$/$1/
+          - abbrev/^fj$/fa/
+  auxiliary:
+    dictionary: aux_path_test_aux
+    algebra:
+      aux_path_test:
+        - "aux|^([a-z])[a-z]*$|$1|"
+        - "aux|^([a-z]{2,})$|$1|abbrev"
+)YAML";
+  ASSERT_TRUE(DictCompiler::CompileAuxiliary(schema_file));
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_file));
+
+  for (const string type : {"pinyin", "zrm"}) {
+    SCOPED_TRACE(type);
+    auto config = std::make_unique<Config>();
+    ASSERT_TRUE(config->LoadFromFile(schema_file));
+    std::istringstream settings(R"YAML(engine:
+  segmentors: [abc_segmentor, fallback_segmentor]
+  translators: [script_translator]
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz/
+translator:
+  dictionary: aux_path_test
+  user_dict_mode: off
+  aux: aux_path_test
+  direct_word_aux_option: direct_word_aux
+  enable_completion: false
+)YAML");
+    Config input;
+    ASSERT_TRUE(input.LoadFromStream(settings));
+    for (const string key : {"engine", "speller", "translator"})
+      ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
+    ASSERT_TRUE(config->SetString("translator/prism", type));
+    the<Engine> engine(Engine::Create());
+    engine->ApplySchema(new Schema("word_aux_tail_test", config.release()));
+    auto* context = engine->context();
+    auto query = [&](const string& raw, bool enabled) {
+      context->Clear();
+      context->set_option("direct_word_aux", enabled);
+      context->set_input(raw);
+      vector<string> words;
+      if (context->composition().empty())
+        return words;
+      const auto menu = context->composition().back().menu;
+      if (!menu)
+        return words;
+      const auto count = menu->Prepare(50);
+      for (size_t i = 0; i < count; ++i) {
+        auto candidate = menu->GetCandidateAt(i);
+        if (candidate && candidate->end() == raw.size())
+          words.push_back(candidate->text());
+      }
+      return words;
+    };
+    const string base = type == "zrm" ? "nizl" : "nizai";
+    const auto weak = query(base + "f", false);
+    ASSERT_FALSE(weak.empty());
+    EXPECT_EQ("你再烦", weak.front());
+    const auto matched = query(base + "f", true);
+    ASSERT_FALSE(matched.empty());
+    EXPECT_EQ("拟在", matched.front());
+    EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "你再烦"));
+    EXPECT_EQ(1, std::count(matched.begin(), matched.end(), "拟在"));
+
+    // A real complete last syllable wins even if the word AUX also matches.
+    const auto complete = query(base + "fa", true);
+    ASSERT_FALSE(complete.empty());
+    EXPECT_EQ("你再发", complete.front());
+    EXPECT_EQ(1, std::count(complete.begin(), complete.end(), "拟在"));
+
+    // A valid complete spelling without a real phrase is not sufficient.
+    const auto no_phrase = query(base + "fo", true);
+    ASSERT_FALSE(no_phrase.empty());
+    EXPECT_EQ("拟在", no_phrase.front());
+    const auto unmatched = query(base + "k", false);
+    ASSERT_FALSE(unmatched.empty());
+    EXPECT_EQ(unmatched, query(base + "k", true));
+
+    // Earlier syllables can be abbreviations. A high-weight weak candidate
+    // must not hide a complete final syllable behind it.
+    const auto short_weak = query("nzf", true);
+    ASSERT_FALSE(short_weak.empty());
+    EXPECT_EQ("拟在", short_weak.front());
+    const auto short_complete = query("nzfa", true);
+    ASSERT_FALSE(short_complete.empty());
+    EXPECT_EQ("你再发", short_complete.front());
+    const auto& words = short_complete;
+    EXPECT_EQ(1, std::count(words.begin(), words.end(), "你再烦"));
+  }
+}
