@@ -7,7 +7,6 @@
 #ifndef RIME_SCRIPT_TRANSLATOR_H_
 #define RIME_SCRIPT_TRANSLATOR_H_
 
-#include <variant>
 #include <rime/common.h>
 #include <rime/translation.h>
 #include <rime/translator.h>
@@ -68,8 +67,8 @@ class ScriptTranslator : public Translator,
   std::shared_ptr<AuxiliaryMatcher> auxiliary_matcher_;
   the<AuxiliaryDb> auxiliary_db_;
   string auxiliary_type_;
-  std::variant<bool, string> enable_direct_char_aux_ = false;
-  std::variant<bool, string> enable_direct_word_aux_ = false;
+  enum class DirectAuxMode { kOff, kChar, kWord };
+  DirectAuxMode direct_aux_mode_ = DirectAuxMode::kOff;
   the<Poet> poet_;
 
   bool LearnFromCommit(Context* ctx, Memory* writer) override;
