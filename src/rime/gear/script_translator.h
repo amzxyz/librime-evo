@@ -80,7 +80,9 @@ class ScriptTranslator : public Translator,
   bool CollectSelectedPhrase(Context* ctx, DictEntry* entry);
   bool WritePhrase(Memory* writer, const DictEntry& entry, bool learn);
   bool LoadAuxiliaryMatcher();
-  an<Translation> QueryDirectWordAuxiliary(const string& input, size_t start);
+  an<Translation> QueryDirectWordAuxiliary(const string& input,
+                                          size_t start,
+                                          const DictTextFilter& charset);
 };
 
 }  // namespace rime

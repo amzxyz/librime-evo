@@ -130,7 +130,8 @@ class LazyTableTranslation : public TableTranslation {
                        size_t start,
                        size_t end,
                        const string& preedit,
-                       bool user_dict_available);
+                       bool user_dict_available,
+                       DictTextFilter charset);
   bool FetchUserPhrases(TableTranslator* translator);
   virtual bool FetchMoreUserPhrases();
   virtual bool FetchMoreTableEntries();
@@ -142,6 +143,7 @@ class LazyTableTranslation : public TableTranslation {
   size_t limit_;
   size_t user_dict_limit_;
   string user_dict_key_;
+  DictTextFilter charset_;
 };
 
 LazyTableTranslation::LazyTableTranslation(TableTranslator* translator,
@@ -149,7 +151,8 @@ LazyTableTranslation::LazyTableTranslation(TableTranslator* translator,
                                            size_t start,
                                            size_t end,
                                            const string& preedit,
-                                           bool user_dict_available)
+                                           bool user_dict_available,
+                                           DictTextFilter charset)
     : TableTranslation(translator,
                        translator->language(),
                        input,
@@ -160,7 +163,8 @@ LazyTableTranslation::LazyTableTranslation(TableTranslator* translator,
       blacklist_(&translator->blacklist()),
       user_dict_(user_dict_available ? translator->user_dict() : NULL),
       limit_(kInitialSearchLimit),
-      user_dict_limit_(kInitialSearchLimit) {
+      user_dict_limit_(kInitialSearchLimit),
+      charset_(std::move(charset)) {
   FetchUserPhrases(translator) || FetchMoreUserPhrases();
   FetchMoreTableEntries();
   // 手排位置按完整同码词库计算，不受初始候选数量限制。
@@ -169,6 +173,7 @@ LazyTableTranslation::LazyTableTranslation(TableTranslator* translator,
     DictEntryIterator anchors;
     if (dict_)
       dict_->LookupWords(&anchors, input_, false, 0, blacklist_);
+    anchors.AddTextFilter(charset_);
     user_rank::Apply(&iter_, &uter_, false, &anchors);
   } else {
     user_rank::Apply(&iter_, &uter_);
@@ -205,6 +210,35 @@ bool LazyTableTranslation::FetchMoreUserPhrases() {
 bool LazyTableTranslation::FetchMoreTableEntries() {
   if (!dict_ || limit_ == 0)
     return false;
+  if (charset_) {
+    // Resume by raw dictionary position, not by the number of allowed words.
+    // A fully rejected initial batch must not hide later eligible matches.
+    size_t previous = iter_.entry_count();
+    do {
+      DictEntryIterator more;
+      const size_t keys = dict_->LookupWords(&more, input_, true, limit_);
+      if (keys < limit_)
+        limit_ = 0;
+      else
+        limit_ *= kExpandingFactor;
+      const size_t count = more.entry_count();
+      if (count > previous) {
+        more.Skip(previous);
+        if (!blacklist_->empty()) {
+          more.AddFilter([blacklist = blacklist_](an<DictEntry> entry) {
+            return entry && !blacklist->count(entry->text);
+          });
+        }
+        more.AddTextFilter(charset_);
+        user_rank::FilterPinnedStatic(&more, uter_);
+        iter_ = std::move(more);
+        previous = count;
+        if (!iter_.exhausted())
+          return true;
+      }
+    } while (limit_ != 0);
+    return !iter_.exhausted();
+  }
   size_t previous_entry_count = iter_.entry_count();
   DLOG(INFO) << "fetching more table entries: limit = " << limit_
              << ", count = " << previous_entry_count;
@@ -293,15 +327,18 @@ an<Translation> TableTranslator::Query(const string& input,
   string code = input;
   boost::trim_right_if(code, boost::is_any_of(delimiters_));
 
+  const auto charset = MakeCharsetFilter(engine_->context(), &segment);
   an<Translation> translation;
   if (enable_completion_) {
     translation = Cached<LazyTableTranslation>(this, code, segment.start,
                                                segment.start + input.length(),
-                                               preedit, user_dict_available);
+                                               preedit, user_dict_available,
+                                               charset);
   } else {
     DictEntryIterator iter;
     if (dict_ && dict_->loaded()) {
       dict_->LookupWords(&iter, code, false, 0, &blacklist());
+      iter.AddTextFilter(charset);
     }
     UserDictEntryIterator uter;
     if (user_dict_available) {
@@ -318,7 +355,7 @@ an<Translation> TableTranslator::Query(const string& input,
   }
   if (translation) {
     bool filter_by_charset =
-        enable_charset_filter_ &&
+        !has_charset_policy() && enable_charset_filter_ &&
         !engine_->context()->get_option("extended_charset");
     if (filter_by_charset) {
       translation = New<CharsetFilterTranslation>(translation);
@@ -329,9 +366,9 @@ an<Translation> TableTranslator::Query(const string& input,
   }
   if (enable_sentence_ && !translation) {
     translation = MakeSentence(input, segment.start,
-                               /* include_prefix_phrases = */ true);
+                               /* include_prefix_phrases = */ true, &segment);
   } else if (sentence_over_completion_ && starts_with_completion(translation)) {
-    if (auto sentence = MakeSentence(input, segment.start)) {
+    if (auto sentence = MakeSentence(input, segment.start, false, &segment)) {
       translation = sentence + translation;
     }
   }
@@ -585,11 +622,13 @@ inline static void collect_entries(DictEntryList& entries,
 
 an<Translation> TableTranslator::MakeSentence(const string& input,
                                               size_t start,
-                                              bool include_prefix_phrases) {
+                                              bool include_prefix_phrases,
+                                              const Segment* segment) {
   if (!engine_ ||
       !SelectPrism(dict_.get(), engine_->context(), user_dict_.get()))
     return nullptr;
-  bool filter_by_charset = enable_charset_filter_ &&
+  const auto charset = MakeCharsetFilter(engine_->context(), segment);
+  bool filter_by_charset = !has_charset_policy() && enable_charset_filter_ &&
                            !engine_->context()->get_option("extended_charset");
   DictEntryCollector collector;
   UserDictEntryCollector user_phrase_collector;
@@ -695,9 +734,10 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
         DictEntryIterator iter;
         dict_->LookupWords(&iter, active_input.substr(0, m.length), false, 0,
                            &blacklist());
-        if (filter_by_charset) {
+        if (charset)
+          iter.AddTextFilter(charset);
+        else if (filter_by_charset)
           iter.AddFilter(CharsetFilter::FilterDictEntry);
-        }
         if (!iter.exhausted()) {
           vertices.insert(end_pos);
           if (start_pos == 0 && max_homographs_ - homographs.size() > 1) {

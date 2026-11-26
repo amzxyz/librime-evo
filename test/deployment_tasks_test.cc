@@ -11,6 +11,8 @@
 #include <rime/dict/rewrite_store.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/gear/charset_policy.h>
+#include <rime/segmentation.h>
 #include <rime/lever/build_compiler.h>
 #include <rime/lever/deployment_tasks.h>
 #include <rime/service.h>
@@ -270,6 +272,110 @@ TEST_F(RimeWorkspacePrismTest, RewriteKeyValueResourceWithoutFilter) {
   ASSERT_TRUE(update.Run(&deployer_));
   ASSERT_TRUE(resource->LookupFirst("一", &value));
   EXPECT_EQ("fgju", value);
+}
+
+TEST_F(RimeWorkspacePrismTest, CharsetPolicyRulesAndExemptions) {
+  std::ofstream(root_ / "charset.tsv")
+      << "你\ta\n妳\tT\n𰻞\tT\n";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/rewrites/charset:
+    files: [charset.tsv]
+)YAML";
+  ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
+  std::ofstream(root_ / "policy.yaml") << R"YAML(charset:
+  data: charset
+  exclude_tags: [reverse]
+  rules:
+    - option: small
+      base: a
+      addlist: ["𰻞"]
+    - options: [traditional, alternate]
+      base: T
+      blacklist: ["𰻞"]
+missing:
+  data: missing_charset
+  rules:
+    - option: true
+      base: a
+)YAML";
+  Config config;
+  ASSERT_TRUE(config.LoadFromFile(root_ / "policy.yaml"));
+  auto policy = CharsetPolicy::Load(&config, "charset");
+  ASSERT_TRUE(policy);
+  Context context;
+  EXPECT_FALSE(policy->Bind(&context));
+  context.set_option("small", true);
+  auto checker = policy->Bind(&context);
+  ASSERT_TRUE(checker);
+  EXPECT_TRUE(checker("你"));
+  EXPECT_TRUE(checker("𰻞"));
+  EXPECT_FALSE(checker("妳"));
+  EXPECT_FALSE(checker("丁"));
+  EXPECT_TRUE(checker("妳好"));
+  EXPECT_TRUE(checker("abc"));
+  EXPECT_TRUE(checker("😊"));
+  context.set_option("alternate", true);
+  auto combined = policy->Bind(&context);
+  ASSERT_TRUE(combined);
+  EXPECT_TRUE(combined("你"));
+  EXPECT_TRUE(combined("妳"));
+  EXPECT_FALSE(combined("𰻞"));
+  EXPECT_TRUE(checker("𰻞"));  // Existing queries retain their rule snapshot.
+  Segment reverse;
+  reverse.tags.insert("reverse");
+  EXPECT_FALSE(policy->Bind(&context, &reverse));
+  auto missing = CharsetPolicy::Load(&config, "missing");
+  ASSERT_TRUE(missing);
+  EXPECT_FALSE(missing->Bind(&context));
+}
+
+TEST_F(RimeWorkspacePrismTest, CharsetFiltersBeforeScriptSentenceSearch) {
+  std::ofstream(root_ / "workspace_prism.dict.yaml") << R"YAML(---
+name: workspace_prism
+version: "1"
+...
+妳	ni	1000
+你	ni	100
+)YAML";
+  std::ofstream(root_ / "charset.tsv") << "你\ta\n妳\tT\n";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  engine/processors: [speller, selector, express_editor]
+  engine/segmentors: [abc_segmentor]
+  engine/translators: [script_translator]
+  translator:
+    dictionary: workspace_prism
+    prism: shared
+    user_dict_mode: off
+    charset: charset
+    max_homophones: 1
+    enable_completion: false
+  build/rewrites/charset:
+    files: [charset.tsv]
+  charset:
+    data: charset
+    rules:
+      - option: small
+        base: a
+)YAML";
+  ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
+  auto api = rime_get_api();
+  auto session = api->create_session();
+  ASSERT_NE(0, session);
+  ASSERT_TRUE(api->select_schema(session, "workspace_prism_main"));
+  api->set_option(session, "small", true);
+  ASSERT_TRUE(api->process_key(session, 'a', 0));
+  ASSERT_TRUE(api->process_key(session, 'b', 0));
+  auto* context = Service::instance().GetSession(session)->context();
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("你", context->GetSelectedCandidate()->text());
+  ASSERT_TRUE(api->process_key(session, 'a', 0));
+  ASSERT_TRUE(api->process_key(session, 'b', 0));
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("你你", context->GetSelectedCandidate()->text());
+  api->set_option(session, "small", false);
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("妳妳", context->GetSelectedCandidate()->text());
+  api->destroy_session(session);
 }
 
 TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {
