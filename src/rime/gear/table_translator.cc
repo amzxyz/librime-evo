@@ -18,7 +18,6 @@
 #include <rime/translation.h>
 #include <rime/dict/dictionary.h>
 #include <rime/dict/user_dictionary.h>
-#include <rime/gear/charset_filter.h>
 #include <rime/gear/poet.h>
 #include <rime/gear/table_translator.h>
 #include <rime/gear/translator_commons.h>
@@ -264,8 +263,6 @@ TableTranslator::TableTranslator(const Ticket& ticket)
   if (!engine_)
     return;
   if (Config* config = engine_->schema()->config()) {
-    config->GetBool(name_space_ + "/enable_charset_filter",
-                    &enable_charset_filter_);
     config->GetBool(name_space_ + "/enable_sentence", &enable_sentence_);
     config->GetBool(name_space_ + "/sentence_over_completion",
                     &sentence_over_completion_);
@@ -351,14 +348,6 @@ an<Translation> TableTranslator::Query(const string& input,
       translation = Cached<TableTranslation>(
           this, language(), code, segment.start, segment.start + input.length(),
           preedit, std::move(iter), std::move(uter));
-  }
-  if (translation) {
-    bool filter_by_charset =
-        !has_charset_policy() && enable_charset_filter_ &&
-        !engine_->context()->get_option("extended_charset");
-    if (filter_by_charset) {
-      translation = New<CharsetFilterTranslation>(translation);
-    }
   }
   if (translation && translation->exhausted()) {
     translation.reset();  // discard futile translation
@@ -627,8 +616,6 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
       !SelectPrism(dict_.get(), engine_->context(), user_dict_.get()))
     return nullptr;
   const auto charset = MakeCharsetFilter(engine_->context(), segment);
-  bool filter_by_charset = !has_charset_policy() && enable_charset_filter_ &&
-                           !engine_->context()->get_option("extended_charset");
   DictEntryCollector collector;
   UserDictEntryCollector user_phrase_collector;
   WordGraph graph;
@@ -654,9 +641,6 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
         string resume_key;
         string key = active_input.substr(0, len);
         user_dict_->LookupWords(&uter, key, false, 0, &resume_key);
-        if (filter_by_charset) {
-          uter.AddFilter(CharsetFilter::FilterDictEntry);
-        }
         if (!uter.exhausted()) {
           vertices.insert(end_pos);
           if (start_pos == 0 && max_homographs_ > 1) {
@@ -692,9 +676,6 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
         string resume_key;
         string key = active_input.substr(0, len);
         encoder_->LookupPhrases(&uter, key, false, 0, &resume_key);
-        if (filter_by_charset) {
-          uter.AddFilter(CharsetFilter::FilterDictEntry);
-        }
         if (!uter.exhausted()) {
           vertices.insert(end_pos);
           if (start_pos == 0 && max_homographs_ > 1) {
@@ -733,10 +714,7 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
         DictEntryIterator iter;
         dict_->LookupWords(&iter, active_input.substr(0, m.length), false, 0,
                            &blacklist());
-        if (charset)
-          iter.AddTextFilter(charset);
-        else if (filter_by_charset)
-          iter.AddFilter(CharsetFilter::FilterDictEntry);
+        iter.AddTextFilter(charset);
         if (!iter.exhausted()) {
           vertices.insert(end_pos);
           if (start_pos == 0 && max_homographs_ - homographs.size() > 1) {
@@ -758,13 +736,9 @@ an<Translation> TableTranslator::MakeSentence(const string& input,
   }
   if (auto sentence =
           poet_->MakeSentence(graph, input.length(), GetPrecedingText(start))) {
-    auto result = Cached<SentenceTranslation>(
+    return Cached<SentenceTranslation>(
         this, std::move(sentence), std::move(collector),
         std::move(user_phrase_collector), input, start);
-    if (result && filter_by_charset) {
-      return New<CharsetFilterTranslation>(result);
-    }
-    return result;
   }
   return nullptr;
 }

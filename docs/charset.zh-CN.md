@@ -25,8 +25,8 @@ charset:
 ```
 
 `script_translator` 与 `table_translator` 均可通过各自的 `charset` 字段引用策略。
-未配置的翻译器不受影响。保留原有 `charset_filter` 和
-`enable_charset_filter` 行为供其他方案使用；码表翻译器配置新策略时以新策略为准。
+未配置的翻译器不受影响。EVO 只提供这一套原生字符集准入机制，
+不再提供旧式扩展区字符滤镜及其兼容配置。
 
 启用规则之间的 base 和 addlist 取并集，blacklist 一票否决；
 `option: true` 表示始终启用。属性区分大小写。无规则开启、命中 exclude_tags

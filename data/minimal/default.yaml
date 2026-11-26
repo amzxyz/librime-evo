@@ -17,7 +17,6 @@ switcher:
     - full_shape
     - ascii_punct
     - simplification
-    - extended_charset
   fold_options: true
   abbreviate_options: true
   option_list_separator: '／'
@@ -124,7 +123,6 @@ key_binder:
     - { when: always, accept: Control+Shift+2, toggle: ascii_mode }
     - { when: always, accept: Control+Shift+3, toggle: full_shape }
     - { when: always, accept: Control+Shift+4, toggle: simplification }
-    - { when: always, accept: Control+Shift+5, toggle: extended_charset }
     - { when: always, accept: Shift+space, toggle: full_shape }
     - { when: always, accept: Control+period, toggle: ascii_punct }
 

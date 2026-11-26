@@ -172,7 +172,6 @@ class TranslatorOptions {
   const hash_set<string>& blacklist() { return blacklist_; }
   DictTextFilter MakeCharsetFilter(const Context* context,
                                    const Segment* segment = nullptr) const;
-  bool has_charset_policy() const { return bool(charset_policy_); }
 
  protected:
   string delimiters_;

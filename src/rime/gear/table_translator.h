@@ -42,7 +42,6 @@ class TableTranslator : public Translator,
   UnityTableEncoder* encoder() const { return encoder_.get(); }
 
  protected:
-  bool enable_charset_filter_ = false;
   bool enable_encoder_ = false;
   bool enable_sentence_ = true;
   bool sentence_over_completion_ = false;
