@@ -114,6 +114,7 @@ class RIME_DLL RewriteStage {
   ~RewriteStage();
 
   bool Lookup(std::string_view text, vector<string>* values) const;
+  bool LookupFirst(std::string_view text, string* value) const;
   bool LookupWithPreedit(std::string_view text,
                          vector<RewriteResult>* values) const;
   bool ConvertSentence(std::string_view text, string* result) const;
