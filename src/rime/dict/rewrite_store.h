@@ -11,6 +11,9 @@
 #include <rime/common.h>
 #include <rime/dict/rewrite_stage.h>
 
+// Public exact-query helpers on RewriteStore and RewriteResource.
+#define RIME_EVO_REWRITE_LOOKUP 1
+
 namespace rime {
 
 struct RewriteStageId {
@@ -36,6 +39,8 @@ class RIME_DLL RewriteStore {
                     const vector<path>& reusable = {});
 
   bool Lookup(std::string_view text, vector<string>* values) const;
+  // First exact result, in the same order as Lookup. No sentence conversion.
+  bool LookupFirst(std::string_view text, string* value) const;
   bool LookupWithPreedit(std::string_view text,
                          vector<RewriteResult>* values) const;
   bool ConvertSentence(std::string_view text,
@@ -57,6 +62,10 @@ class RIME_DLL RewriteResource {
   static an<RewriteResource> Require(const string& name);
   static void ReleaseForDeployment();
   an<const RewriteStore> Acquire();
+
+  // Exact, read-only lookups; the current snapshot is pinned for each call.
+  bool Lookup(std::string_view text, vector<string>* values);
+  bool LookupFirst(std::string_view text, string* value);
 
  private:
   RewriteResource(path staging, path prebuilt, string file_name);

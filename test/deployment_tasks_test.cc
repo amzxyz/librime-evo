@@ -8,6 +8,7 @@
 #include <rime/component.h>
 #include <rime/deployer.h>
 #include <rime/dict/prism.h>
+#include <rime/dict/rewrite_store.h>
 #include <rime/context.h>
 #include <rime/engine.h>
 #include <rime/lever/build_compiler.h>
@@ -241,6 +242,34 @@ TEST_F(RimeWorkspacePrismTest, SharesPrismOnlyWhenAlgebraMatches) {
   ASSERT_TRUE(shared.Load());
   EXPECT_TRUE(shared.HasKey("ab"));
   EXPECT_FALSE(shared.HasKey("cd"));
+}
+
+TEST_F(RimeWorkspacePrismTest, RewriteKeyValueResourceWithoutFilter) {
+  std::ofstream(root_ / "charset.tsv") << "# charset\n一\tTabfghjtu\n";
+  std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
+  build/rewrites/charset:
+    files: [charset.tsv]
+)YAML";
+  WorkspaceUpdate update;
+  ASSERT_TRUE(update.Run(&deployer_));
+  ASSERT_TRUE(fs::exists(deployer_.staging_dir / "charset.rewrite.bin"));
+  EXPECT_FALSE(RewriteResource::Require("../charset"));
+  auto resource = RewriteResource::Require("charset");
+  ASSERT_TRUE(resource);
+  EXPECT_EQ(resource, RewriteResource::Require("charset"));
+  string value;
+  ASSERT_TRUE(resource->LookupFirst("一", &value));
+  EXPECT_EQ("Tabfghjtu", value);
+  vector<string> values;
+  ASSERT_TRUE(resource->Lookup("一", &values));
+  EXPECT_EQ((vector<string>{"Tabfghjtu"}), values);
+  EXPECT_FALSE(resource->LookupFirst("丁", &value));
+  EXPECT_TRUE(value.empty());
+
+  std::ofstream(root_ / "charset.tsv") << "一\tfgju\n";
+  ASSERT_TRUE(update.Run(&deployer_));
+  ASSERT_TRUE(resource->LookupFirst("一", &value));
+  EXPECT_EQ("fgju", value);
 }
 
 TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {

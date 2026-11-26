@@ -50,6 +50,11 @@ TEST_F(RimeRewriteStoreTest, OrderedStagesAndIncrementalBuild) {
     vector<string> values;
     ASSERT_TRUE(store->Lookup("甲", &values));
     EXPECT_EQ((vector<string>{"乙"}), values);
+    string first;
+    ASSERT_TRUE(store->LookupFirst("甲", &first));
+    EXPECT_EQ(values.front(), first);
+    EXPECT_FALSE(store->LookupFirst("未命中", &first));
+    EXPECT_TRUE(first.empty());
     vector<RewriteResult> rewritten;
     ASSERT_TRUE(store->LookupWithPreedit("甲", &rewritten));
     ASSERT_EQ(1u, rewritten.size());
@@ -206,6 +211,37 @@ TEST_F(RimeRewriteStoreTest, CompactStagePreservesAllLookupPaths) {
   EXPECT_FALSE(RewriteStore::Open(file));
   ASSERT_TRUE(RewriteStore::Build(file, ids, load));
   EXPECT_TRUE(RewriteStore::Open(file));
+}
+
+TEST_F(RimeRewriteStoreTest, ExactKeyValueLookup) {
+  const path file = root_ / "charset.rewrite.bin";
+  ASSERT_TRUE(RewriteStore::Build(
+      file, {{1, 1}}, [](size_t, RewriteStageData* data) {
+        data->entries = {{"一", "Tabfghjtu", ""},
+                         {"𰻞", "fgju", ""},
+                         {"一丁", "phrase", ""},
+                         {"一丁", "alternate", ""},
+                         {"space", "a b", ""}};
+        return true;
+      }));
+  auto store = RewriteStore::Open(file);
+  ASSERT_TRUE(store);
+  string value;
+  ASSERT_TRUE(store->LookupFirst("一", &value));
+  EXPECT_EQ("Tabfghjtu", value);
+  ASSERT_TRUE(store->LookupFirst("𰻞", &value));
+  EXPECT_EQ("fgju", value);
+  ASSERT_TRUE(store->LookupFirst("space", &value));
+  EXPECT_EQ("a b", value);
+  vector<string> values;
+  ASSERT_TRUE(store->Lookup("一丁", &values));
+  ASSERT_EQ((vector<string>{"phrase", "alternate"}), values);
+  ASSERT_TRUE(store->LookupFirst("一丁", &value));
+  EXPECT_EQ(values.front(), value);
+  EXPECT_FALSE(store->LookupFirst("一丁丁", &value));
+  EXPECT_TRUE(value.empty());
+  EXPECT_FALSE(store->LookupFirst("", &value));
+  EXPECT_FALSE(store->LookupFirst("一", nullptr));
 }
 
 TEST_F(RimeRewriteStoreTest, RejectsPreviousFormatVersion) {

@@ -283,6 +283,22 @@ bool RewriteStore::Lookup(std::string_view text, vector<string>* values) const {
   return matched;
 }
 
+bool RewriteStore::LookupFirst(std::string_view text, string* value) const {
+  if (!value)
+    return false;
+  if (stages_.size() == 1)
+    return stages_.front()->LookupFirst(text, value);
+  // Do not greedily choose one branch at each stage: preserve Lookup's
+  // ordered, deduplicated multi-stage semantics.
+  vector<string> values;
+  if (!Lookup(text, &values) || values.empty()) {
+    value->clear();
+    return false;
+  }
+  *value = std::move(values.front());
+  return true;
+}
+
 bool RewriteStore::LookupWithPreedit(std::string_view text,
                                      vector<RewriteResult>* values) const {
   if (!values || stages_.empty())
@@ -395,6 +411,24 @@ an<const RewriteStore> RewriteResource::Acquire() {
     std::atomic_store(&store_, std::move(store));
   }
   return std::atomic_load(&store_);
+}
+
+bool RewriteResource::Lookup(std::string_view text, vector<string>* values) {
+  if (!values)
+    return false;
+  if (auto store = Acquire())
+    return store->Lookup(text, values);
+  values->clear();
+  return false;
+}
+
+bool RewriteResource::LookupFirst(std::string_view text, string* value) {
+  if (!value)
+    return false;
+  if (auto store = Acquire())
+    return store->LookupFirst(text, value);
+  value->clear();
+  return false;
 }
 
 void RewriteResource::ReleaseForDeployment() {

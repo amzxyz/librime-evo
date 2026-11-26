@@ -1365,6 +1365,20 @@ bool RewriteStage::Lookup(std::string_view text, vector<string>* values) const {
   return impl_->stage.Lookup(text, values);
 }
 
+bool RewriteStage::LookupFirst(std::string_view text, string* value) const {
+  if (!value)
+    return false;
+  size_t key_id = 0;
+  std::string_view first;
+  if (!impl_->stage.FindExactKey(text, &key_id) ||
+      !impl_->stage.GetFirstValue(key_id, &first)) {
+    value->clear();
+    return false;
+  }
+  value->assign(first);
+  return true;
+}
+
 bool RewriteStage::LookupWithPreedit(std::string_view text,
                                      vector<RewriteResult>* values) const {
   return impl_->stage.LookupWithPreedit(text, values);
