@@ -330,10 +330,9 @@ an<Translation> TableTranslator::Query(const string& input,
   const auto charset = MakeCharsetFilter(engine_->context(), &segment);
   an<Translation> translation;
   if (enable_completion_) {
-    translation = Cached<LazyTableTranslation>(this, code, segment.start,
-                                               segment.start + input.length(),
-                                               preedit, user_dict_available,
-                                               charset);
+    translation = Cached<LazyTableTranslation>(
+        this, code, segment.start, segment.start + input.length(), preedit,
+        user_dict_available, charset);
   } else {
     DictEntryIterator iter;
     if (dict_ && dict_->loaded()) {

@@ -45,18 +45,12 @@ bool ReadCharacters(const an<ConfigItem>& item, hash_set<uint32_t>* result) {
 }
 
 bool IsHan(uint32_t ch) {
-  return (ch >= 0x4e00 && ch <= 0x9fff) ||
-         (ch >= 0x3400 && ch <= 0x4dbf) ||
-         (ch >= 0x20000 && ch <= 0x2a6df) ||
-         (ch >= 0x2a700 && ch <= 0x2b73f) ||
-         (ch >= 0x2b740 && ch <= 0x2b81f) ||
-         (ch >= 0x2b820 && ch <= 0x2ceaf) ||
-         (ch >= 0x2ceb0 && ch <= 0x2ebef) ||
-         (ch >= 0x2ebf0 && ch <= 0x2ee5f) ||
-         (ch >= 0x30000 && ch <= 0x3347f) ||
-         (ch >= 0xf900 && ch <= 0xfaff) ||
-         (ch >= 0x2f800 && ch <= 0x2fa1f) ||
-         (ch >= 0x2e80 && ch <= 0x2eff) ||
+  return (ch >= 0x4e00 && ch <= 0x9fff) || (ch >= 0x3400 && ch <= 0x4dbf) ||
+         (ch >= 0x20000 && ch <= 0x2a6df) || (ch >= 0x2a700 && ch <= 0x2b73f) ||
+         (ch >= 0x2b740 && ch <= 0x2b81f) || (ch >= 0x2b820 && ch <= 0x2ceaf) ||
+         (ch >= 0x2ceb0 && ch <= 0x2ebef) || (ch >= 0x2ebf0 && ch <= 0x2ee5f) ||
+         (ch >= 0x30000 && ch <= 0x3347f) || (ch >= 0xf900 && ch <= 0xfaff) ||
+         (ch >= 0x2f800 && ch <= 0x2fa1f) || (ch >= 0x2e80 && ch <= 0x2eff) ||
          (ch >= 0x2f00 && ch <= 0x2fdf);
 }
 
@@ -96,7 +90,7 @@ struct Checker {
 }  // namespace
 
 an<CharsetPolicy> CharsetPolicy::Load(Config* config,
-                                       const string& name_space) {
+                                      const string& name_space) {
   string data;
   if (!config || !config->GetString(name_space + "/data", &data))
     return nullptr;

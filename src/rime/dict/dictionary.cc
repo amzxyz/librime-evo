@@ -419,9 +419,8 @@ void DictEntryIterator::AddTextFilter(DictTextFilter filter) {
   } else {
     text_filter_ = filter;
   }
-  AddFilter([filter](an<DictEntry> entry) {
-    return entry && filter(entry->text);
-  });
+  AddFilter(
+      [filter](an<DictEntry> entry) { return entry && filter(entry->text); });
 }
 
 an<DictEntry> DictEntryIterator::Peek() {
