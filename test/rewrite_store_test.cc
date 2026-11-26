@@ -215,15 +215,15 @@ TEST_F(RimeRewriteStoreTest, CompactStagePreservesAllLookupPaths) {
 
 TEST_F(RimeRewriteStoreTest, ExactKeyValueLookup) {
   const path file = root_ / "charset.rewrite.bin";
-  ASSERT_TRUE(RewriteStore::Build(
-      file, {{1, 1}}, [](size_t, RewriteStageData* data) {
-        data->entries = {{"一", "Tabfghjtu", ""},
-                         {"𰻞", "fgju", ""},
-                         {"一丁", "phrase", ""},
-                         {"一丁", "alternate", ""},
-                         {"space", "a b", ""}};
-        return true;
-      }));
+  auto load = [](size_t, RewriteStageData* data) {
+    data->entries = {{"一", "Tabfghjtu", ""},
+                     {"𰻞", "fgju", ""},
+                     {"一丁", "phrase", ""},
+                     {"一丁", "alternate", ""},
+                     {"space", "a b", ""}};
+    return true;
+  };
+  ASSERT_TRUE(RewriteStore::Build(file, {{1, 1}}, load));
   auto store = RewriteStore::Open(file);
   ASSERT_TRUE(store);
   string value;
