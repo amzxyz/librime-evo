@@ -275,8 +275,7 @@ TEST_F(RimeWorkspacePrismTest, RewriteKeyValueResourceWithoutFilter) {
 }
 
 TEST_F(RimeWorkspacePrismTest, CharsetPolicyRulesAndExemptions) {
-  std::ofstream(root_ / "charset.tsv")
-      << "你\ta\n妳\tT\n𰻞\tT\n";
+  std::ofstream(root_ / "charset.tsv") << "你\ta\n妳\tT\n𰻞\tT\n";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
   build/rewrites/charset:
     files: [charset.tsv]
