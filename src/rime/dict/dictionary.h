@@ -42,10 +42,12 @@ class RIME_DLL DictEntryIterator : public DictEntryFilterBinder {
   // A cursor-independent snapshot for rank anchoring; does not advance the live
   // translation.
   DictEntryIterator Fork() const;
-  // O(number of indexed chunks), no materialization or iteration over words.
+  // O(number of indexed chunks) without a text admission constraint.
   // Used only for Q>0 automatic learning to find native per-code top weights.
   std::map<Code, double> TopWeightsByCode(bool separate_readings) const;
   void AddFilter(DictEntryFilter filter) override;
+  // Admission constraints also apply to per-code weight anchors.
+  void AddTextFilter(DictTextFilter filter);
   an<DictEntry> Peek();
   bool Next();
   bool Skip(size_t num_entries);
@@ -64,6 +66,7 @@ class RIME_DLL DictEntryIterator : public DictEntryFilterBinder {
   size_t ordered_index_ = 0;
   bool ordered_mode_ = false;
   bool has_abbreviated_auxiliary_ = false;
+  DictTextFilter text_filter_;
 };
 
 using DictEntryCollector = map<size_t, DictEntryIterator>;

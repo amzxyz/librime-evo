@@ -266,6 +266,7 @@ class ScriptTranslation : public Translation {
                     double sentence_cutoff_threshold,
                     bool use_direct_char_aux,
                     string auxiliary_suffix,
+                    DictTextFilter charset,
                     an<const DirectWordAuxiliary> word_auxiliary = nullptr)
       : translator_(translator),
         poet_(poet),
@@ -282,7 +283,8 @@ class ScriptTranslation : public Translation {
         sentence_cutoff_threshold_(sentence_cutoff_threshold),
         enable_correction_(corrector),
         auxiliary_suffix_(std::move(auxiliary_suffix)),
-        word_auxiliary_(std::move(word_auxiliary)) {
+        word_auxiliary_(std::move(word_auxiliary)),
+        charset_(std::move(charset)) {
     set_exhausted(true);
   }
   bool Evaluate(Dictionary* dict, UserDictionary* user_dict);
@@ -343,6 +345,7 @@ class ScriptTranslation : public Translation {
   bool enable_correction_;
   string auxiliary_suffix_;
   an<const DirectWordAuxiliary> word_auxiliary_;
+  DictTextFilter charset_;
 };
 
 // ScriptTranslator implementation
@@ -471,12 +474,13 @@ an<Translation> ScriptTranslator::Query(const string& input,
   bool user_dict_available =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
 
+  const auto charset = MakeCharsetFilter(context, &segment);
   size_t end_of_input = suffix ? segment.end : context->input().length();
   // the translator should survive translations it creates
   auto result = New<ScriptTranslation>(
       this, corrector_.get(), poet_.get(), input, segment.start, end_of_input,
       max_sentences_, sentence_cutoff_threshold_, use_direct_char_aux,
-      std::move(auxiliary_suffix));
+      std::move(auxiliary_suffix), charset);
   an<Translation> ordinary;
   if (result->Evaluate(dict_.get(),
                        user_dict_available ? user_dict_.get() : nullptr)) {
@@ -490,7 +494,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
     return ordinary;
   }
 
-  auto words = QueryDirectWordAuxiliary(input, segment.start);
+  auto words = QueryDirectWordAuxiliary(input, segment.start, charset);
   if (!words)
     return ordinary;
   if (ordinary) {
@@ -505,8 +509,10 @@ an<Translation> ScriptTranslator::Query(const string& input,
   return New<DistinctTranslation>(words);
 }
 
-an<Translation> ScriptTranslator::QueryDirectWordAuxiliary(const string& input,
-                                                           size_t start) {
+an<Translation> ScriptTranslator::QueryDirectWordAuxiliary(
+    const string& input,
+    size_t start,
+    const DictTextFilter& charset) {
   auto words = New<UnionTranslation>();
   const std::string_view raw(input);
   for (size_t length = 1; length < raw.size(); ++length) {
@@ -518,7 +524,7 @@ an<Translation> ScriptTranslator::QueryDirectWordAuxiliary(const string& input,
         DirectWordAuxiliary{string(code), auxiliary_matcher_});
     auto branch = New<ScriptTranslation>(this, nullptr, nullptr, input, start,
                                          start + raw.size(), 0, 0.0, false,
-                                         string{}, auxiliary);
+                                         string{}, charset, auxiliary);
     auto* user_dict = user_dict_ && user_dict_->loaded() &&
                               !IsUserDictDisabledFor(input.substr(0, split))
                           ? user_dict_.get()
@@ -938,6 +944,10 @@ bool ScriptTranslation::Evaluate(Dictionary* dict, UserDictionary* user_dict) {
         user_dict->Lookup(syllable_graph, 0, kUnlimitedDepth,
                           predict_word ? kNumSyllablesToPredictWord : 0);
   }
+  if (phrase_ && charset_) {
+    for (auto& [end, entries] : *phrase_)
+      entries.AddTextFilter(charset_);
+  }
   if (word_auxiliary_) {
     FilterDirectWordAuxiliaryEntries(phrase_, consumed, word_auxiliary_);
     FilterDirectWordAuxiliaryEntries(user_phrase_, consumed, word_auxiliary_);
@@ -1247,6 +1257,10 @@ WordGraph ScriptTranslation::PrepareForMakingSentence(
                             : nullptr;
     auto system_results =
         dict->Lookup(syllable_graph, x.first, &translator_->blacklist());
+    if (system_results && charset_) {
+      for (auto& [end, entries] : *system_results)
+        entries.AddTextFilter(charset_);
+    }
     // 句子组合仍按读音隔离，避免手排跨读音影响 Poet 的路径评分。
     if (user_dict)
       RankUserPhrases(*dict, system_results, user_results,

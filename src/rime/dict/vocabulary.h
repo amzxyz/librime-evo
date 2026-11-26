@@ -89,6 +89,7 @@ class DictEntryList : public vector<of<DictEntry>> {
 };
 
 using DictEntryFilter = function<bool(an<DictEntry> entry)>;
+using DictTextFilter = function<bool(const string& text)>;
 
 class RIME_DLL DictEntryFilterBinder {
  public:

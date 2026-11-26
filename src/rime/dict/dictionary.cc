@@ -235,7 +235,8 @@ DictEntryIterator::DictEntryIterator(const DictEntryIterator& other)
       ordered_entries_(other.ordered_entries_),
       ordered_index_(other.ordered_index_),
       ordered_mode_(other.ordered_mode_),
-      has_abbreviated_auxiliary_(other.has_abbreviated_auxiliary_) {}
+      has_abbreviated_auxiliary_(other.has_abbreviated_auxiliary_),
+      text_filter_(other.text_filter_) {}
 
 DictEntryIterator& DictEntryIterator::operator=(
     const DictEntryIterator& other) {
@@ -296,7 +297,19 @@ std::map<Code, double> DictEntryIterator::TopWeightsByCode(
         !c.remaining_code.empty())
       continue;
     const Code key = separate_readings ? c.code : Code{};
-    const double value = c.entries[c.cursor].weight - kLogScale + c.credibility;
+    size_t cursor = c.cursor;
+    if (text_filter_) {
+      while (cursor < c.size) {
+        const auto text = c.table->GetEntryText(c.entries[cursor]);
+        if ((!c.auxiliary_path || c.auxiliary_path->Matches(text)) &&
+            text_filter_(text))
+          break;
+        ++cursor;
+      }
+      if (cursor == c.size)
+        continue;
+    }
+    const double value = c.entries[cursor].weight - kLogScale + c.credibility;
     auto it = result.find(key);
     if (it == result.end())
       result[key] = value;
@@ -393,6 +406,22 @@ void DictEntryIterator::AddFilter(DictEntryFilter filter) {
     entry_.reset();
     FindNextEntry();
   }
+}
+
+void DictEntryIterator::AddTextFilter(DictTextFilter filter) {
+  if (!filter)
+    return;
+  if (text_filter_) {
+    auto previous = std::move(text_filter_);
+    text_filter_ = [previous, filter](const string& text) {
+      return previous(text) && filter(text);
+    };
+  } else {
+    text_filter_ = filter;
+  }
+  AddFilter([filter](an<DictEntry> entry) {
+    return entry && filter(entry->text);
+  });
 }
 
 an<DictEntry> DictEntryIterator::Peek() {

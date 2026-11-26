@@ -135,6 +135,8 @@ class Context;
 class Dictionary;
 class Prism;
 class UserDictionary;
+class CharsetPolicy;
+struct Segment;
 
 class TranslatorOptions {
  public:
@@ -168,6 +170,9 @@ class TranslatorOptions {
   Projection& preedit_formatter() { return preedit_formatter_; }
   Projection& comment_formatter() { return comment_formatter_; }
   const hash_set<string>& blacklist() { return blacklist_; }
+  DictTextFilter MakeCharsetFilter(const Context* context,
+                                   const Segment* segment = nullptr) const;
+  bool has_charset_policy() const { return bool(charset_policy_); }
 
  protected:
   string delimiters_;
@@ -185,6 +190,7 @@ class TranslatorOptions {
   PrismConfig prism_config_;
   bool prism_config_valid_ = true;
   an<Prism> active_prism_;
+  an<CharsetPolicy> charset_policy_;
 };
 
 }  // namespace rime

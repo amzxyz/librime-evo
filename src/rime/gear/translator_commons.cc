@@ -12,6 +12,7 @@
 #include <rime/dict/user_dictionary.h>
 #include <rime/schema.h>
 #include <rime/ticket.h>
+#include <rime/gear/charset_policy.h>
 #include <rime/gear/grammar.h>
 #include <rime/gear/translator_commons.h>
 
@@ -156,6 +157,10 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
     if (tags_.empty())
       tags_.push_back("abc");
 
+    string charset;
+    if (config->GetString(ticket.name_space + "/charset", &charset))
+      charset_policy_ = CharsetPolicy::Load(config, charset);
+
     // blacklist
     if (auto blacklist =
             config->GetList(ticket.name_space + "/dictionary_exclude")) {
@@ -211,6 +216,13 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
       *changed = true;
   }
   return true;
+}
+
+DictTextFilter TranslatorOptions::MakeCharsetFilter(
+    const Context* context,
+    const Segment* segment) const {
+  return charset_policy_ ? charset_policy_->Bind(context, segment)
+                         : DictTextFilter{};
 }
 
 bool TranslatorOptions::IsUserDictDisabledFor(const string& input) const {
