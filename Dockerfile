@@ -22,7 +22,6 @@ COPY . .
 
 RUN bash install-plugins.sh \
   amzxyz/librime-evo-lua \
-  rime/librime-charcode \
   amzxyz/librime-evo-octagram \
   rime/librime-predict
 
