@@ -7,7 +7,7 @@
 | 配置 | 当前接入方式 |
 | --- | --- |
 | `switches` | 传统配置 API 读取菜单定义，get_option 读取运行时状态 |
-| `switcher/save_options` | 原生 Switcher 的全局记忆白名单；普通 set_option 仅改变会话状态。Android 当前仍有兼容持久化实现，待统一设计 |
+| `switcher/save_options` | 已废弃。普通开关通过 select_switch 按方案记忆，set_option 仅改变运行时状态 |
 | `switcher/fix_schema_list_order` | 传统配置；下一会话的实际初始方案通过 get_initial_schema 获取 |
 | `translator/dictionary`、`translator/prism`、`prisms`、`build/dictionaries` | 内核资源工厂解释；前端不推导编译文件名 |
 | `grammar/language` | 模型插件解析；预热返回实际映射文件路径 |
@@ -32,6 +32,7 @@
 | get_initial_schema | 获取下次会话的初始方案，无需创建会话 |
 | prewarm_schema / free_string_list | 无活动会话时准备只读资源，返回实际映射路径；空方案 ID 使用初始方案。路径列表由内核分配并成对释放 |
 | release_prewarm | 释放临时资源持有；不强制回收操作系统页缓存 |
+| select_switch | 主动选择普通开关；reset 不保存，无 reset 按方案保存；单选组选择 true，false 不取消整组；未声明的选项返回 false |
 
 预热及部署细节见 [部署文档](deployment.zh-CN.md)，编码选择见 [编码选择文档](code_choice.zh-CN.md)。
 
@@ -43,3 +44,7 @@
 - 前端编译时使用对应特性宏，运行时使用 RIME_API_AVAILABLE 检查函数可用性；不得仅凭引擎名称认定功能。
 - 内核重构、上游同步、第三方代码移植及发布前检查公共 C ABI。确需破坏时先说明原因、影响与迁移方案。
 - 公共 C ABI 兼容不代表内部 C++ 插件 ABI 或数据格式兼容。
+
+## 普通开关记忆
+
+`switcher/save_options` 已废弃，普通开关由方案的 `switches` 定义。初始化时有效 reset 优先，否则恢复 `var/schema_options/<schema_id>/<option>`；缺少记忆时布尔默认 false，单选组默认第一项。旧 `var/option` 仅作无独立记忆时的迁移输入，不再写入。单选组整组保存。临时 set_option、快捷键及 inline ASCII 不触发记忆。前端应在用户明确选择时调用 select_switch；类型组仍使用独立接口。不同方案切换时清理旧方案普通开关并在构建组件前恢复目标方案。

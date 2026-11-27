@@ -108,11 +108,15 @@ class ConcreteEngine : public Engine {
   virtual void CommitText(string text);
   virtual void Compose(Context* ctx);
   void GetCodeChoices(vector<CodeChoice>* result) override;
+  bool SelectConfiguredSwitch(const string& option, bool value);
 
  protected:
   bool ProcessKey(const KeyEvent& key_event, bool synthetic);
   void InitializeComponents();
   void InitializeOptions();
+  bool IsTypeOption(const string& option) const;
+  void RefreshOptionComponents(Context* ctx);
+  void NotifyOption(Context* ctx, const string& option);
   void CalculateSegmentation(Segmentation* segments);
   void TranslateSegments(Segmentation* segments);
   void FormatText(string* text);
@@ -134,12 +138,19 @@ class ConcreteEngine : public Engine {
   an<Switcher> switcher_;
   map<string, OptionGroupConfig> type_groups_;
   bool enforcing_type_group_ = false;
+  bool applying_switch_ = false;
+  set<string> schema_switches_;
 };
 
 // implementations
 
 Engine* Engine::Create() {
   return new ConcreteEngine;
+}
+
+bool Engine::SelectSwitch(const string& option, bool value) {
+  auto* engine = dynamic_cast<ConcreteEngine*>(this);
+  return engine && engine->SelectConfiguredSwitch(option, value);
 }
 
 Engine::Engine() : schema_(new Schema), context_(new Context) {}
@@ -166,11 +177,7 @@ ConcreteEngine::ConcreteEngine() {
       });
 
   switcher_ = New<Switcher>(this);
-  // saved options should be loaded only once per input session
-  switcher_->RestoreSavedOptions();
-
   InitializeComponents();
-  InitializeOptions();
 }
 
 ConcreteEngine::~ConcreteEngine() {
@@ -213,26 +220,29 @@ void ConcreteEngine::OnContextUpdate(Context* ctx) {
   Compose(ctx);
 }
 
+void ConcreteEngine::RefreshOptionComponents(Context* ctx) {
+  UpdateComponentConditions(processors_, ctx);
+  UpdateComponentConditions(segmentors_, ctx);
+  UpdateComponentConditions(translators_, ctx);
+  UpdateComponentConditions(filters_, ctx);
+  if (ctx->IsComposing())
+    ctx->RefreshNonConfirmedComposition();
+}
+
+void ConcreteEngine::NotifyOption(Context* ctx, const string& option) {
+  const bool on = ctx->get_option(option);
+  message_sink_("option", on ? option : "!" + option);
+}
+
 void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
-  if (!ctx)
+  if (!ctx || applying_switch_)
     return;
   EnforceTypeOption(ctx, option);
   LOG(INFO) << "updated option: " << option;
-  // A radio-group change emits nested option notifications. Recompose after
-  // all members have reached their final values.
-  if (!enforcing_type_group_) {
-    UpdateComponentConditions(processors_, ctx);
-    UpdateComponentConditions(segmentors_, ctx);
-    UpdateComponentConditions(translators_, ctx);
-    UpdateComponentConditions(filters_, ctx);
-    if (ctx->IsComposing()) {
-      ctx->RefreshNonConfirmedComposition();
-    }
-  }
-  // notification
-  bool option_is_on = ctx->get_option(option);
-  string msg(option_is_on ? option : "!" + option);
-  message_sink_("option", msg);
+  // Recompose after all members of an exclusive group have settled.
+  if (!enforcing_type_group_)
+    RefreshOptionComponents(ctx);
+  NotifyOption(ctx, option);
 }
 
 void ConcreteEngine::SaveTypeChoice(const string& group, const string& option) {
@@ -494,7 +504,6 @@ void ConcreteEngine::ApplySchema(Schema* schema) {
   context_->Clear();
   context_->ClearTransientOptions();
   InitializeComponents();
-  InitializeOptions();
   switcher_->SetActiveSchema(schema_->schema_id());
   message_sink_("schema", schema_->schema_id() + "/" + schema_->schema_name());
 }
@@ -801,6 +810,8 @@ void ConcreteEngine::InitializeComponents() {
   filters_.clear();
   formatters_.clear();
   post_processors_.clear();
+  context_->ClearSchemaOptions(schema_switches_);
+  schema_switches_.clear();
 
   if (switcher_) {
     ComponentEntry<Processor> entry;
@@ -818,6 +829,7 @@ void ConcreteEngine::InitializeComponents() {
     return;
 
   InitializeTypeGroups();
+  InitializeOptions();
 
   // Create components using inline template function
   CreateComponentsFromList<Processor>(this, config, "engine/processors",
@@ -854,29 +866,182 @@ void ConcreteEngine::InitializeComponents() {
   }
 }
 
+namespace {
+
+using SwitchOption = Switches::SwitchOption;
+
+vector<SwitchOption> SwitchMembers(Switches& switches,
+                                  const SwitchOption& first) {
+  vector<SwitchOption> members;
+  switches.FindOption([&](SwitchOption option) {
+    if (option.switch_index == first.switch_index)
+      members.push_back(std::move(option));
+    return Switches::kContinue;
+  });
+  return members;
+}
+
+bool PublicSwitchName(const string& name) {
+  return !name.empty() && name.front() != '_' &&
+         name.find('/') == string::npos;
+}
+
+string SwitchPath(const string& schema, const string& option) {
+  return "var/schema_options/" + schema + "/" + option;
+}
+
+bool SaveSwitchValues(Config* user,
+                      const string& schema,
+                      const vector<SwitchOption>& members,
+                      const vector<bool>& values) {
+  if (!user)
+    return false;
+  bool changed = false;
+  for (size_t i = 0; i < members.size(); ++i) {
+    const string path = SwitchPath(schema, members[i].option_name);
+    bool old = false;
+    if (user->GetBool(path, &old) && old == values[i])
+      continue;
+    if (!user->SetBool(path, values[i]))
+      LOG(ERROR) << "cannot save switch: " << path;
+    else
+      changed = true;
+  }
+  return changed;
+}
+
+}  // namespace
+
+bool ConcreteEngine::IsTypeOption(const string& option) const {
+  for (const auto& [group, types] : type_groups_) {
+    if (types.Contains(option))
+      return true;
+  }
+  return false;
+}
+
 void ConcreteEngine::InitializeOptions() {
-  LOG(INFO) << "ConcreteEngine::InitializeOptions";
-  // reset custom switches
   Config* config = schema_->config();
+  if (!config)
+    return;
+  auto* user = switcher_ ? switcher_->user_config() : nullptr;
+  const auto& schema_id = schema_->schema_id();
   Switches switches(config);
-  switches.FindOption([this](Switches::SwitchOption option) {
-    for (const auto& [group, types] : type_groups_) {
-      if (types.Contains(option.option_name))
+  bool migrated = false;
+  switches.FindOption([&](SwitchOption first) {
+    if (first.option_index != 0)
+      return Switches::kContinue;
+    auto members = SwitchMembers(switches, first);
+    for (const auto& member : members) {
+      // Type groups have their own exclusive selection and persistence.
+      if (IsTypeOption(member.option_name))
         return Switches::kContinue;
+      if (!member.option_name.empty())
+        schema_switches_.insert(member.option_name);
     }
-    LOG(INFO) << "found switch option: " << option.option_name
-              << ", reset: " << option.reset_value;
-    if (option.reset_value >= 0) {
-      if (option.type == Switches::kToggleOption) {
-        context_->set_option(option.option_name, (option.reset_value != 0));
-      } else if (option.type == Switches::kRadioGroup) {
-        context_->set_option(
-            option.option_name,
-            static_cast<int>(option.option_index) == option.reset_value);
+    if (members.empty())
+      return Switches::kContinue;
+    const bool radio = first.type == Switches::kRadioGroup;
+    const bool remember =
+        first.reset_value < 0 && !schema_id.empty() &&
+        schema_id.find('/') == string::npos &&
+        std::all_of(members.begin(), members.end(), [](const auto& member) {
+          return PublicSwitchName(member.option_name);
+        });
+    vector<bool> values(members.size(), false);
+    bool scoped = false, legacy = false;
+    if (remember && user) {
+      for (size_t i = 0; i < members.size(); ++i) {
+        bool saved = false;
+        if (user->GetBool(SwitchPath(schema_id, members[i].option_name),
+                          &saved)) {
+          values[i] = saved;
+          scoped = true;
+        }
       }
+      // Old global values are migration input only. Never mix a scoped
+      // radio group with a partially saved legacy group.
+      if (!scoped) {
+        for (size_t i = 0; i < members.size(); ++i) {
+          bool saved = false;
+          if (user->GetBool("var/option/" + members[i].option_name, &saved)) {
+            values[i] = saved;
+            legacy = true;
+          }
+        }
+      }
+    }
+    if (radio) {
+      size_t selected = 0;
+      if (first.reset_value >= 0) {
+        if (static_cast<size_t>(first.reset_value) < members.size())
+          selected = first.reset_value;
+      } else {
+        const auto found = std::find(values.begin(), values.end(), true);
+        if (found != values.end())
+          selected = found - values.begin();
+      }
+      for (size_t i = 0; i < members.size(); ++i)
+        values[i] = i == selected;
+    } else if (first.reset_value >= 0) {
+      values[0] = first.reset_value != 0;
+    }
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (!members[i].option_name.empty())
+        context_->set_option(members[i].option_name, values[i]);
+    }
+    if (remember && (legacy || (radio && scoped))) {
+      migrated |= SaveSwitchValues(user, schema_id, members, values);
     }
     return Switches::kContinue;
   });
+  if (migrated && !user->Save())
+    LOG(ERROR) << "cannot save migrated switches";
+}
+
+bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
+  if (!schema_->config() || !PublicSwitchName(option) || IsTypeOption(option))
+    return false;
+  Switches switches(schema_->config());
+  auto selected = switches.OptionByName(option);
+  if (!selected.found())
+    return false;
+  const auto members = SwitchMembers(switches, selected);
+  for (const auto& member : members) {
+    if (!PublicSwitchName(member.option_name) ||
+        IsTypeOption(member.option_name))
+      return false;
+  }
+  const bool radio = selected.type == Switches::kRadioGroup;
+  // A radio selection selects one member, never deselects the whole group.
+  if (radio && !value)
+    return true;
+  vector<bool> values;
+  vector<string> changed;
+  applying_switch_ = true;
+  for (const auto& member : members) {
+    const bool next = radio ? member.option_index == selected.option_index
+                            : value;
+    values.push_back(next);
+    if (context_->get_option(member.option_name) != next) {
+      context_->set_option(member.option_name, next);
+      changed.push_back(member.option_name);
+    }
+  }
+  applying_switch_ = false;
+  if (!changed.empty()) {
+    RefreshOptionComponents(context_.get());
+    for (const auto& name : changed)
+      NotifyOption(context_.get(), name);
+  }
+  const auto& schema_id = schema_->schema_id();
+  if (selected.reset_value < 0 && switcher_ && !schema_id.empty() &&
+      schema_id.find('/') == string::npos) {
+    auto* user = switcher_->user_config();
+    if (SaveSwitchValues(user, schema_id, members, values) && !user->Save())
+      LOG(ERROR) << "cannot save switches";
+  }
+  return true;
 }
 
 }  // namespace rime

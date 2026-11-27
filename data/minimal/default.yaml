@@ -13,10 +13,7 @@ switcher:
     - Control+grave
     - Control+Shift+grave
     - F4
-  save_options:
-    - full_shape
-    - ascii_punct
-    - simplification
+  # Switches without reset remember explicit selections per schema.
   fold_options: true
   abbreviate_options: true
   option_list_separator: '／'

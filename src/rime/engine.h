@@ -38,6 +38,8 @@ class Engine : public Messenger {
   void set_active_engine(Engine* engine = nullptr) { active_engine_ = engine; }
 
   RIME_DLL static Engine* Create();
+  // Explicit user selection; ordinary set_option remains session-local.
+  RIME_DLL bool SelectSwitch(const string& option, bool value);
   // Open only immutable resources for the built-in translators/filters.
   // Pins are temporary and must be dropped before deployment or module unload.
   static void PrepareSchemaResources(Schema* schema, vector<an<void>>* pins);

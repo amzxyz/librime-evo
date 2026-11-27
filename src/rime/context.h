@@ -85,6 +85,11 @@ class RIME_DLL Context {
   // options and properties starting with '_' are local to schema;
   // others are session scoped.
   void ClearTransientOptions();
+  // Drop the previous schema's declared switch state without notifications.
+  void ClearSchemaOptions(const set<string>& names) {
+    for (const auto& name : names)
+      options_.erase(name);
+  }
 
   Notifier& commit_notifier() { return commit_notifier_; }
   Notifier& select_notifier() { return select_notifier_; }

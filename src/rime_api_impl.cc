@@ -1278,6 +1278,16 @@ RIME_DEPRECATED Bool RimeDeleteCandidateOnCurrentPage(RimeSessionId session_id,
                                                  &Context::DeleteCandidate);
 }
 
+static Bool RimeSelectSwitch(RimeSessionId session_id,
+                             const char* option,
+                             Bool value) {
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !option || !session->engine() ||
+      session->engine()->active_engine() != session->engine())
+    return False;
+  return Bool(session->engine()->SelectSwitch(option, !!value));
+}
+
 static Bool RimeEditCandidate(RimeSessionId session_id,
                               size_t index,
                               Bool on_current_page,
@@ -1609,6 +1619,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.free_string_list = &RimeFreeStringList;
     s_api.release_prewarm = &RimeReleasePrewarm;
     s_api.deployment_has_other_failure = &RimeDeploymentHasOtherFailure;
+    s_api.select_switch = &RimeSelectSwitch;
   }
   return &s_api;
 }
