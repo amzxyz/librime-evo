@@ -20,14 +20,15 @@ namespace {
 class InputTypesTest : public ::testing::Test {
  protected:
   void SetUp() override {
+    the<Config> user(Config::Require("user_config")->Create("user"));
+    ASSERT_TRUE(
+        user->SetString("var/type_groups/input_types_test/input_types", ""));
     engine_.reset(Engine::Create());
     auto* config = new Config;
     std::istringstream stream(R"yaml(
 input_types:
-  reset: zrm
-  options:
-    - {option: pinyin, label: 全拼}
-    - {option: zrm, label: 自然码}
+  - {option: zrm, label: 自然码}
+  - {option: pinyin, label: 全拼}
 )yaml");
     ASSERT_TRUE(config->LoadFromStream(stream));
     engine_->ApplySchema(new Schema("input_types_test", config));
@@ -36,7 +37,7 @@ input_types:
   the<Engine> engine_;
 };
 
-TEST_F(InputTypesTest, ResetsToConfiguredInputType) {
+TEST_F(InputTypesTest, DefaultsToFirstInputType) {
   EXPECT_FALSE(engine_->context()->get_option("pinyin"));
   EXPECT_TRUE(engine_->context()->get_option("zrm"));
 }
@@ -88,46 +89,108 @@ TEST_F(InputTypesTest, SwitchingRecomposesOnceAfterTheRadioGroupSettles) {
   registry.Unregister("input_type_counter");
 }
 
-TEST(InputTypesEnabledTest, DisabledOptionCannotBeActivatedOrRestored) {
-  the<Engine> engine(Engine::Create());
-  auto config = new Config;
-  std::istringstream data(R"YAML(input_types:
-  enabled: [pinyin, flypy]
-  reset: flypy
-  options:
-    - {option: pinyin, label: 全拼}
-    - {option: zrm, label: 自然码}
-    - {option: flypy, label: 小鹤}
+TEST(TypeGroupsTest, TypeChoicesPersistButOrdinarySwitchesReset) {
+  const string id = "type_reset_test";
+  const string path = "var/type_groups/" + id;
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  auto schema = [&]() {
+    auto config = new Config;
+    std::istringstream data(R"YAML(input_types:
+  - {option: pinyin}
+  - {option: zrm}
+aux_types: [{option: aux_wanxiang}, {option: aux_zrm}]
+switches:
+  - name: test_toggle
+    reset: 1
+    states: [off, on]
+  - options: [test_radio_a, test_radio_b]
+    reset: 1
+    states: [A, B]
 )YAML");
-  ASSERT_TRUE(config->LoadFromStream(data));
-  engine->context()->set_option("zrm", true);
-  engine->ApplySchema(new Schema("enabled_input_test", config));
-  EXPECT_TRUE(engine->context()->get_option("flypy"));
-  EXPECT_FALSE(engine->context()->get_option("zrm"));
-  engine->context()->set_option("zrm", true);
-  EXPECT_FALSE(engine->context()->get_option("zrm"));
-  EXPECT_TRUE(engine->context()->get_option("flypy"));
-  engine->context()->set_option("pinyin", true);
-  EXPECT_TRUE(engine->context()->get_option("pinyin"));
-  EXPECT_FALSE(engine->context()->get_option("flypy"));
-  engine->context()->set_option("pinyin", false);
-  EXPECT_TRUE(engine->context()->get_option("pinyin"));
+    EXPECT_TRUE(config->LoadFromStream(data));
+    return new Schema(id, config);
+  };
+  the<Engine> engine(Engine::Create());
+  engine->ApplySchema(schema());
+  auto* context = engine->context();
+  EXPECT_TRUE(context->get_option("pinyin"));
+  EXPECT_TRUE(context->get_option("aux_wanxiang"));
+  EXPECT_TRUE(context->get_option("test_toggle"));
+  EXPECT_FALSE(context->get_option("test_radio_a"));
+  EXPECT_TRUE(context->get_option("test_radio_b"));
+  context->set_option("zrm", true);
+  context->set_option("aux_zrm", true);
+  context->set_option("test_toggle", false);
+  context->set_option("test_radio_a", true);
+  context->set_option("test_radio_b", false);
+  engine->ApplySchema(schema());
+  EXPECT_TRUE(context->get_option("zrm"));
+  EXPECT_TRUE(context->get_option("aux_zrm"));
+  EXPECT_TRUE(context->get_option("test_toggle"));
+  EXPECT_FALSE(context->get_option("test_radio_a"));
+  EXPECT_TRUE(context->get_option("test_radio_b"));
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  EXPECT_TRUE(user->Save());
 }
 
-TEST(InputTypesEnabledTest, NoResetPreservesAnEnabledSelection) {
-  the<Engine> engine(Engine::Create());
+TEST(TypeGroupsTest, RemovedChoiceFallsBackToFirstOption) {
+  const string id = "removed_type_test";
+  const string path = "var/type_groups/" + id + "/input_types";
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  ASSERT_TRUE(user->SetString(path, "zrm"));
   auto config = new Config;
   std::istringstream data(R"YAML(input_types:
-  enabled: [pinyin, flypy]
-  options:
-    - {option: pinyin}
-    - {option: flypy}
+  - {option: pinyin}
+  - {option: flypy}
 )YAML");
   ASSERT_TRUE(config->LoadFromStream(data));
-  engine->context()->set_option("flypy", true);
-  engine->ApplySchema(new Schema("saved_input_test", config));
-  EXPECT_TRUE(engine->context()->get_option("flypy"));
-  EXPECT_FALSE(engine->context()->get_option("pinyin"));
+  the<Engine> engine(Engine::Create());
+  engine->ApplySchema(new Schema(id, config));
+  EXPECT_TRUE(engine->context()->get_option("pinyin"));
+  EXPECT_EQ("pinyin", user->GetValue(path)->str());
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  EXPECT_TRUE(user->Save());
+}
+
+TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
+  const string schema_id = "saved_type_groups_test";
+  const string path = "var/type_groups/" + schema_id;
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  auto schema = [&]() {
+    auto config = new Config;
+    std::istringstream data(R"YAML(input_types:
+  - {option: pinyin}
+  - {option: flypy}
+aux_types: [{option: aux_wanxiang}, {option: aux_zrm}]
+)YAML");
+    EXPECT_TRUE(config->LoadFromStream(data));
+    return new Schema(schema_id, config);
+  };
+  {
+    the<Engine> engine(Engine::Create());
+    engine->ApplySchema(schema());
+    EXPECT_TRUE(engine->context()->get_option("pinyin"));
+    EXPECT_TRUE(engine->context()->get_option("aux_wanxiang"));
+    engine->context()->set_option("flypy", true);
+    engine->context()->set_option("aux_zrm", true);
+    EXPECT_TRUE(engine->context()->get_option("flypy"));
+    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
+    EXPECT_FALSE(engine->context()->get_option("aux_wanxiang"));
+  }
+  {
+    the<Engine> engine(Engine::Create());
+    engine->ApplySchema(schema());
+    EXPECT_TRUE(engine->context()->get_option("flypy"));
+    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
+    EXPECT_FALSE(engine->context()->get_option("pinyin"));
+    EXPECT_FALSE(engine->context()->get_option("aux_wanxiang"));
+    engine->context()->set_option("aux_zrm", false);
+    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
+  }
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  EXPECT_TRUE(user->Save());
 }
 }  // namespace
 }  // namespace rime

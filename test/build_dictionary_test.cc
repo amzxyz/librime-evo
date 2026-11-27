@@ -1195,13 +1195,9 @@ TEST_F(RimeBuildDictionaryTest, TableUserEntriesWorkWithoutStaticDictionary) {
   EXPECT_EQ("好", Query(translator.get(), "hk"));
 }
 
-TEST_F(RimeBuildDictionaryTest, SharedInputTypesControlBuildAndAllTranslators) {
+TEST_F(RimeBuildDictionaryTest, BuildAllPrismsIndependentlyOfTypeOptions) {
   WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  enabled: [pinyin]
-  reset: pinyin
-  options:
-    - {option: pinyin}
-    - {option: zrm}
+  - {option: pinyin}
 lookup:
   dictionary: build_dict_test
   prisms: input_types
@@ -1212,18 +1208,7 @@ lookup:
 )YAML");
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   EXPECT_TRUE(std::filesystem::exists("build_dict_test.pinyin.prism.bin"));
-  EXPECT_FALSE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
-  // Produce an old disabled prism, as left behind by an earlier deployment.
-  {
-    Config all;
-    ASSERT_TRUE(all.LoadFromFile(schema_path_));
-    all.SetItem("input_types", nullptr);
-    all.SetItem("lookup/prisms", nullptr);
-    const path source{"build_dict_rules.yaml"};
-    ASSERT_TRUE(all.SaveToFile(source));
-    ASSERT_TRUE(DictCompiler::CompileDictionaries(source));
-  }
-  ASSERT_TRUE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
+  EXPECT_TRUE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
   for (const char* name :
        {"script_translator", "table_translator", "reverse_lookup_translator"}) {
     SCOPED_TRACE(name);
@@ -1232,19 +1217,14 @@ lookup:
         Translator::Require(name)->Create(Ticket(engine.get(), "lookup")));
     ASSERT_TRUE(translator);
     EXPECT_NE(string::npos, Query(translator.get(), "hao").find("好"));
-    engine->context()->set_option("zrm", true);
-    EXPECT_FALSE(engine->context()->get_option("zrm"));
     EXPECT_TRUE(Query(translator.get(), "hk").empty());
   }
 }
 
 TEST_F(RimeBuildDictionaryTest, SharedInputTypesSwitchAllTranslators) {
   WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  enabled: [full, compact]
-  reset: compact
-  options:
-    - {option: full, name: pinyin}
-    - {option: compact, name: zrm}
+  - {option: compact, name: zrm}
+  - {option: full, name: pinyin}
 lookup:
   dictionary: build_dict_test
   prisms: input_types
@@ -1274,48 +1254,60 @@ independent:
   }
 }
 
-TEST_F(RimeBuildDictionaryTest,
-       SharedSelectionRejectsUnknownAndUnavailableTypes) {
-  for (const char* enabled : {"[missing]", "[zrm, zrm]", "[]"}) {
-    WriteSchema(
-        string(kDefinitions) + "input_types:\n  enabled: " + enabled +
-        "\n  options: [{option: pinyin}, {option: zrm}]\n"
-        "lookup:\n  dictionary: build_dict_test\n  prisms: input_types\n");
+TEST_F(RimeBuildDictionaryTest, RejectsInvalidTypeOptions) {
+  for (const char* options : {"[{option: zrm}, {option: zrm}]", "[]"}) {
+    WriteSchema(string(kDefinitions) + "input_types: " + options +
+                "\nlookup:\n  dictionary: build_dict_test\n"
+                "  prisms: input_types\n");
     EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
   }
-  WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  enabled: [pinyin]
-  reset: zrm
-  options: [{option: pinyin}, {option: zrm}]
-lookup:
-  dictionary: build_dict_test
-  prisms: input_types
-)YAML");
-  EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
 }
 
-TEST_F(RimeBuildDictionaryTest, IncludedBuildUsesPatchedInputTypes) {
+TEST_F(RimeBuildDictionaryTest, IncludedBuildIsIndependentOfPatchedInputTypes) {
   std::ofstream("build_dict_catalog.yaml") << kDefinitions;
   WriteSchema(R"YAML(build:
   __include: build_dict_catalog:/build
-input_types:
-  enabled: [zrm]
-  reset: zrm
-  options: [{option: pinyin}, {option: zrm}]
+input_types: [{option: zrm}]
 lookup:
   dictionary: build_dict_test
   prisms: input_types
 )YAML");
   std::ofstream(schema_id_ + ".custom.yaml") << R"YAML(patch:
-  input_types/enabled: [pinyin]
-  input_types/reset: pinyin
+  input_types: [{option: pinyin}]
 )YAML";
   SchemaUpdate update(schema_path_);
   const bool deployed = update.Run(&Service::instance().deployer());
   std::remove("build_dict_catalog.yaml");
   ASSERT_TRUE(deployed);
   EXPECT_TRUE(std::filesystem::exists("build_dict_test.pinyin.prism.bin"));
-  EXPECT_FALSE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
+  EXPECT_TRUE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
+}
+
+TEST_F(RimeBuildDictionaryTest, SharedPrismsArePreloaded) {
+  WriteSchema(string(kDefinitions) + R"YAML(input_types:
+  - {option: pinyin}
+  - {option: zrm}
+translator:
+  dictionary: build_dict_test
+  prisms: input_types
+)YAML");
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  auto engine = OpenEngine();
+  the<Dictionary> dict(Dictionary::Require("dictionary")
+                           ->Create(Ticket(engine.get(), "translator")));
+  ASSERT_TRUE(dict);
+  ASSERT_TRUE(dict->Load());
+  ASSERT_TRUE(dict->SetPrism("zrm"));
+  EXPECT_TRUE(dict->prism()->IsOpen());
+}
+
+TEST_F(RimeBuildDictionaryTest, RejectsMissingPrismDefinition) {
+  WriteSchema(string(kDefinitions) + R"YAML(input_types: [{option: missing}]
+lookup:
+  dictionary: build_dict_test
+  prisms: input_types
+)YAML");
+  EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
 }
 
 TEST_F(RimeBuildDictionaryTest,

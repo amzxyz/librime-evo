@@ -11,6 +11,7 @@
 #include <rime/translation.h>
 #include <rime/translator.h>
 #include <rime/algo/algebra.h>
+#include <rime/dict/prism_config.h>
 #include <rime/gear/memory.h>
 #include <rime/gear/translator_commons.h>
 
@@ -68,8 +69,11 @@ class ScriptTranslator : public Translator,
   the<Projection> canonicalizer_;
   the<Corrector> corrector_;
   std::shared_ptr<AuxiliaryMatcher> auxiliary_matcher_;
-  the<AuxiliaryDb> auxiliary_db_;
+  an<AuxiliaryDb> auxiliary_db_;
+  map<string, an<AuxiliaryDb>> auxiliary_databases_;
   string auxiliary_type_;
+  string active_auxiliary_type_;
+  OptionGroupConfig auxiliary_types_;
   enum class DirectAuxMode { kOff, kChar, kWord };
   DirectAuxMode direct_aux_mode_ = DirectAuxMode::kOff;
   the<Poet> poet_;

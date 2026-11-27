@@ -18,6 +18,7 @@ class AuxiliaryDb;
 class AuxiliaryMatcher {
  public:
   AuxiliaryMatcher(Dictionary* primary, AuxiliaryDb* database = nullptr);
+  AuxiliaryMatcher(Dictionary* primary, an<AuxiliaryDb> database);
 
   void Lookup(const string& input, vector<AuxGraphMatch>* result);
   bool LookupAuxiliary(const string& text, vector<string>* result);
@@ -33,6 +34,7 @@ class AuxiliaryMatcher {
                      map<pair<size_t, size_t>, bool>* memo) const;
 
   Dictionary* primary_ = nullptr;
+  an<AuxiliaryDb> owned_database_;
   AuxiliaryDb* database_ = nullptr;
   map<SyllableId, std::set<string>> characters_by_syllable_;
   map<string, vector<string>> auxiliary_cache_;

@@ -25,16 +25,24 @@ struct PrismConfig {
   bool follows_input_types = false;
 };
 
-struct InputTypesConfig {
-  RIME_DLL bool Load(Config* config);
+struct OptionGroupConfig {
+  RIME_DLL bool Load(Config* config, const string& group = "input_types");
+  RIME_DLL static bool LoadGroups(Config* config,
+                                  map<string, OptionGroupConfig>* groups);
   RIME_DLL bool Contains(const string& option) const;
-  RIME_DLL bool IsEnabled(const string& option) const;
   RIME_DLL string InitialOption(const Context* context) const;
+  RIME_DLL string RestoreChoice(Config* user,
+                                const string& schema,
+                                const string& group) const;
+  RIME_DLL static bool SaveChoice(Config* user,
+                                  const string& schema,
+                                  const string& group,
+                                  const string& option);
 
   vector<PrismConfig::Selection> options;
-  vector<PrismConfig::Selection> enabled;
-  string reset;
 };
+
+using InputTypesConfig = OptionGroupConfig;
 
 }  // namespace rime
 

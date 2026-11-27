@@ -8,6 +8,8 @@
 #include <rime/config.h>
 #include <rime/context.h>
 #include <rime/deployer.h>
+#include <rime/dict/prism_config.h>
+#include <rime/path_resolver.h>
 #include <rime/engine.h>
 #include <rime/key_event.h>
 #include <rime/menu.h>
@@ -1081,6 +1083,75 @@ static void RimeFreeCodeChoices(RimeCodeChoice* choices, size_t count) {
   delete[] choices;
 }
 
+static bool LoadTypeGroup(const char* schema_id,
+                          const char* group,
+                          OptionGroupConfig* types) {
+  if (!schema_id || !group || !safe_path::ValidRelativeName(schema_id) ||
+      (string(group) != "input_types" && string(group) != "aux_types"))
+    return false;
+  Schema schema(schema_id);
+  map<string, OptionGroupConfig> groups;
+  if (!OptionGroupConfig::LoadGroups(schema.config(), &groups))
+    return false;
+  auto found = groups.find(group);
+  if (found == groups.end())
+    return false;
+  *types = std::move(found->second);
+  return true;
+}
+
+static Bool RimeGetTypeOption(RimeSessionId session_id,
+                              const char* schema_id,
+                              const char* group,
+                              char* option,
+                              size_t buffer_size) {
+  OptionGroupConfig types;
+  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
+    return False;
+  string selected;
+  auto session = Service::instance().GetSession(session_id);
+  if (session && session->schema() && session->context() &&
+      session->schema()->schema_id() == schema_id) {
+    for (const auto& item : types.options) {
+      if (session->context()->get_option(item.option)) {
+        selected = item.option;
+        break;
+      }
+    }
+  }
+  if (selected.empty()) {
+    auto component = Config::Require("user_config");
+    the<Config> user(component ? component->Create("user") : nullptr);
+    selected = types.RestoreChoice(user.get(), schema_id, group);
+  }
+  if (selected.size() >= buffer_size)
+    return False;
+  selected.copy(option, selected.size());
+  option[selected.size()] = '\0';
+  return True;
+}
+
+static Bool RimeSelectTypeOption(RimeSessionId session_id,
+                                 const char* schema_id,
+                                 const char* group,
+                                 const char* option) {
+  OptionGroupConfig types;
+  if (!option || !LoadTypeGroup(schema_id, group, &types) ||
+      !types.Contains(option))
+    return False;
+  auto component = Config::Require("user_config");
+  the<Config> user(component ? component->Create("user") : nullptr);
+  if (!OptionGroupConfig::SaveChoice(user.get(), schema_id, group, option))
+    return False;
+  auto session = Service::instance().GetSession(session_id);
+  if (session && session->schema() && session->context() &&
+      session->schema()->schema_id() == schema_id) {
+    session->context()->set_option(option, true);
+    return Bool(session->context()->get_option(option));
+  }
+  return True;
+}
+
 static Bool RimeSelectCodeChoice(RimeSessionId session_id,
                                  size_t start,
                                  size_t end,
@@ -1334,6 +1405,8 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.get_code_choices = &RimeGetCodeChoices;
     s_api.free_code_choices = &RimeFreeCodeChoices;
     s_api.select_code_choice = &RimeSelectCodeChoice;
+    s_api.get_type_option = &RimeGetTypeOption;
+    s_api.select_type_option = &RimeSelectTypeOption;
   }
   return &s_api;
 }

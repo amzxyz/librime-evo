@@ -34,6 +34,11 @@ static bool MatchPrefix(const vector<string>& codes, const string& input) {
 AuxiliaryMatcher::AuxiliaryMatcher(Dictionary* primary, AuxiliaryDb* database)
     : primary_(primary), database_(database) {}
 
+AuxiliaryMatcher::AuxiliaryMatcher(Dictionary* primary, an<AuxiliaryDb> db)
+    : primary_(primary),
+      owned_database_(std::move(db)),
+      database_(owned_database_.get()) {}
+
 void AuxiliaryMatcher::Lookup(const string& input,
                               vector<AuxGraphMatch>* result) {
   if (!primary_ || !primary_->loaded() || !database_ || !result ||

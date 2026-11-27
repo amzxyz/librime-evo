@@ -507,8 +507,7 @@ TEST_F(RimeAuxiliaryLookupTest, UserDictionaryFiltersTheChosenAuxiliaryPath) {
   }
 }
 
-TEST_F(RimeAuxiliaryLookupTest,
-       SharedInputTypesCompileSelectedNineColumnAuxiliary) {
+TEST_F(RimeAuxiliaryLookupTest, BuildAllNineColumnAuxiliaryGroups) {
   database_.reset();
   std::remove("aux_path_test.aux.bin");
   std::remove("aux_path_other.aux.bin");
@@ -516,9 +515,7 @@ TEST_F(RimeAuxiliaryLookupTest,
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
   Config selection;
-  std::istringstream data(R"YAML(input_types:
-  enabled: [pinyin]
-  options: [{option: pinyin}]
+  std::istringstream data(R"YAML(input_types: [{option: pinyin}]
 lookup:
   dictionary: aux_path_test
   aux: aux_path_test
@@ -537,7 +534,7 @@ algebra:
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   ASSERT_TRUE(
       DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
-  EXPECT_FALSE(std::filesystem::exists("aux_path_other.aux.bin"));
+  EXPECT_TRUE(std::filesystem::exists("aux_path_other.aux.bin"));
   AuxiliaryDb database(path{"aux_path_test.aux.bin"});
   ASSERT_TRUE(database.Load());
   vector<AuxiliaryCharacter> characters;
@@ -554,6 +551,95 @@ algebra:
   vector<AuxiliaryCode> codes;
   ASSERT_TRUE(database.ReverseLookup("你", &codes));
   EXPECT_EQ(3u, codes.size());
+}
+
+TEST_F(RimeAuxiliaryLookupTest, AuxOptionsDoNotRestrictBuildGroups) {
+  database_.reset();
+  std::remove("aux_path_test.aux.bin");
+  std::remove("aux_path_other.aux.bin");
+  Config schema;
+  ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
+  Config selection;
+  std::istringstream data(R"YAML(aux_types: [{option: aux_path_other}]
+translator:
+  dictionary: aux_path_test
+  aux: aux_types
+)YAML");
+  ASSERT_TRUE(selection.LoadFromStream(data));
+  ASSERT_TRUE(schema.SetItem("aux_types", selection.GetItem("aux_types")));
+  ASSERT_TRUE(schema.SetItem("translator", selection.GetItem("translator")));
+  ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
+  ASSERT_TRUE(
+      DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
+  EXPECT_TRUE(std::filesystem::exists("aux_path_test.aux.bin"));
+  EXPECT_TRUE(std::filesystem::exists("aux_path_other.aux.bin"));
+}
+
+TEST_F(RimeAuxiliaryLookupTest, RejectsMissingAuxiliaryDefinition) {
+  Config schema;
+  ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
+  std::istringstream settings(R"YAML(aux_types: [{option: missing}]
+translator:
+  dictionary: aux_path_test
+  aux: aux_types
+)YAML");
+  Config input;
+  ASSERT_TRUE(input.LoadFromStream(settings));
+  ASSERT_TRUE(schema.SetItem("aux_types", input.GetItem("aux_types")));
+  ASSERT_TRUE(schema.SetItem("translator", input.GetItem("translator")));
+  ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
+  EXPECT_FALSE(
+      DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
+}
+
+TEST_F(RimeAuxiliaryLookupTest, SwitchesPreloadedAuxiliaryGroups) {
+  database_.reset();
+  auto config = std::make_unique<Config>();
+  ASSERT_TRUE(config->LoadFromFile(path{"aux_path_test.schema.yaml"}));
+  std::istringstream settings(R"YAML(aux_types:
+  - {option: aux_path_test}
+  - {option: aux_path_other}
+engine:
+  segmentors: [auxiliary_suffix_segmentor, abc_segmentor, fallback_segmentor]
+  translators: [script_translator]
+speller:
+  alphabet: "abcdefghijklmnopqrstuvwxyz:"
+  initials: abcdefghijklmnopqrstuvwxyz
+auxiliary_suffix_segmentor:
+  trigger: "::"
+translator:
+  dictionary: aux_path_test
+  prism: zrm
+  user_dict_mode: off
+  aux: aux_types
+  enable_completion: false
+rules:
+  - "aux|^rx$|z|"
+)YAML");
+  Config input;
+  ASSERT_TRUE(input.LoadFromStream(settings));
+  const vector<string> keys = {"aux_types", "engine", "speller",
+                               "auxiliary_suffix_segmentor", "translator"};
+  for (const auto& key : keys)
+    ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
+  ASSERT_TRUE(config->SetItem("build/auxiliary/algebra/aux_path_other",
+                              input.GetItem("rules")));
+  ASSERT_TRUE(config->SaveToFile(path{"aux_path_test.schema.yaml"}));
+  ASSERT_TRUE(
+      DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
+  the<Engine> engine(Engine::Create());
+  engine->ApplySchema(new Schema("aux_group_switch_test", config.release()));
+  auto* context = engine->context();
+  context->set_option("aux_path_test", true);
+  context->set_input("ni::z");
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("逆", context->GetSelectedCandidate()->text());
+  context->set_option("aux_path_other", true);
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("你", context->GetSelectedCandidate()->text());
+  context->set_option("aux_path_test", true);
+  ASSERT_TRUE(context->GetSelectedCandidate());
+  EXPECT_EQ("逆", context->GetSelectedCandidate()->text());
 }
 
 TEST_F(RimeAuxiliaryLookupTest,

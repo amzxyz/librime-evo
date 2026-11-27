@@ -373,6 +373,21 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
       }
     }
     config->GetString(name_space_ + "/aux", &auxiliary_type_);
+    if (auxiliary_type_ == "aux_types") {
+      if (auxiliary_types_.Load(config, "aux_types")) {
+        for (const auto& item : auxiliary_types_.options) {
+          an<AuxiliaryDb> database = AuxiliaryDb::Open(item.name);
+          if (!database) {
+            LOG(ERROR) << "cannot preload auxiliary group '" << item.name
+                       << "'";
+            continue;
+          }
+          auxiliary_databases_.emplace(item.name, std::move(database));
+        }
+      } else {
+        auxiliary_type_.clear();
+      }
+    }
     string mode;
     if (config->GetString(name_space_ + "/direct_aux_mode", &mode)) {
       if (mode == "char")
@@ -549,17 +564,39 @@ bool ScriptTranslator::SelectPrism() {
 }
 
 bool ScriptTranslator::LoadAuxiliaryMatcher() {
+  string selected = auxiliary_type_;
+  if (selected == "aux_types") {
+    selected.clear();
+    for (const auto& item : auxiliary_types_.options) {
+      if (engine_->context()->get_option(item.option)) {
+        selected = item.name;
+        break;
+      }
+    }
+  }
+  if (selected != active_auxiliary_type_) {
+    auxiliary_matcher_.reset();
+    auxiliary_db_.reset();
+    active_auxiliary_type_ = selected;
+  }
   if (auxiliary_matcher_)
     return true;
-  if (auxiliary_type_.empty())
+  if (selected.empty())
     return false;
   if (!auxiliary_db_) {
-    auxiliary_db_ = AuxiliaryDb::Open(auxiliary_type_);
-    if (!auxiliary_db_)
-      return false;
+    if (auxiliary_type_ == "aux_types") {
+      const auto found = auxiliary_databases_.find(selected);
+      if (found == auxiliary_databases_.end())
+        return false;
+      auxiliary_db_ = found->second;
+    } else {
+      auxiliary_db_ = AuxiliaryDb::Open(selected);
+      if (!auxiliary_db_)
+        return false;
+    }
   }
   auxiliary_matcher_ =
-      std::make_shared<AuxiliaryMatcher>(dict_.get(), auxiliary_db_.get());
+      std::make_shared<AuxiliaryMatcher>(dict_.get(), auxiliary_db_);
   return true;
 }
 

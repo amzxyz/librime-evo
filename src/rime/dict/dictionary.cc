@@ -955,9 +955,15 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
     if (selection.name == primary_prism_name) {
       continue;
     }
-    dictionary->AddPrism(
-        selection.name,
-        GetPrism(ResolvePrismName(config, dictionary->name(), selection.name)));
+    auto prism =
+        GetPrism(ResolvePrismName(config, dictionary->name(), selection.name));
+    if (prism_config.follows_input_types && !prism->IsOpen() &&
+        !prism->Load()) {
+      LOG(ERROR) << "cannot preload prism '" << selection.name << "'";
+      delete dictionary;
+      return nullptr;
+    }
+    dictionary->AddPrism(selection.name, prism);
   }
   return dictionary;
 }

@@ -116,8 +116,9 @@ class ConcreteEngine : public Engine {
   void OnContextUpdate(Context* ctx);
   void OnOptionUpdate(Context* ctx, const string& option);
   void OnPropertyUpdate(Context* ctx, const string& property);
-  void LoadInputTypes();
-  void EnforceInputTypeOption(Context* ctx, const string& option);
+  void InitializeTypeGroups();
+  void EnforceTypeOption(Context* ctx, const string& option);
+  void SaveTypeChoice(const string& group, const string& option);
 
   vector<ComponentEntry<Processor>> processors_;
   vector<ComponentEntry<Segmentor>> segmentors_;
@@ -126,9 +127,8 @@ class ConcreteEngine : public Engine {
   vector<of<Formatter>> formatters_;
   vector<of<Processor>> post_processors_;
   an<Switcher> switcher_;
-  InputTypesConfig input_types_;
-  bool input_types_valid_ = true;
-  bool enforcing_input_type_ = false;
+  map<string, OptionGroupConfig> type_groups_;
+  bool enforcing_type_group_ = false;
 };
 
 // implementations
@@ -211,11 +211,11 @@ void ConcreteEngine::OnContextUpdate(Context* ctx) {
 void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
   if (!ctx)
     return;
-  EnforceInputTypeOption(ctx, option);
+  EnforceTypeOption(ctx, option);
   LOG(INFO) << "updated option: " << option;
   // A radio-group change emits nested option notifications. Recompose after
   // all members have reached their final values.
-  if (!enforcing_input_type_) {
+  if (!enforcing_type_group_) {
     UpdateComponentConditions(processors_, ctx);
     UpdateComponentConditions(segmentors_, ctx);
     UpdateComponentConditions(translators_, ctx);
@@ -230,31 +230,60 @@ void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
   message_sink_("option", msg);
 }
 
-void ConcreteEngine::LoadInputTypes() {
-  input_types_valid_ = input_types_.Load(schema_->config());
+void ConcreteEngine::SaveTypeChoice(const string& group, const string& option) {
+  auto* config = switcher_ ? switcher_->user_config() : nullptr;
+  if (option.empty())
+    return;
+  const auto& schema = schema_->schema_id();
+  if (!OptionGroupConfig::SaveChoice(config, schema, group, option))
+    LOG(ERROR) << "cannot save type choice: " << group;
 }
 
-void ConcreteEngine::EnforceInputTypeOption(Context* ctx,
-                                            const string& option) {
-  if (enforcing_input_type_ || !ctx || !input_types_.Contains(option))
-    return;
-  enforcing_input_type_ = true;
-  if (!input_types_valid_ || !input_types_.IsEnabled(option)) {
-    if (ctx->get_option(option))
-      ctx->set_option(option, false);
-  } else if (ctx->get_option(option)) {
-    for (const auto& other : input_types_.options) {
-      if (other.option != option && ctx->get_option(other.option))
-        ctx->set_option(other.option, false);
+void ConcreteEngine::InitializeTypeGroups() {
+  enforcing_type_group_ = true;
+  for (const auto& [group, types] : type_groups_) {
+    for (const auto& item : types.options)
+      context_->set_option(item.option, false);
+  }
+  type_groups_.clear();
+  if (OptionGroupConfig::LoadGroups(schema_->config(), &type_groups_)) {
+    auto* config = switcher_ ? switcher_->user_config() : nullptr;
+    for (const auto& [group, types] : type_groups_) {
+      const string selected =
+          types.RestoreChoice(config, schema_->schema_id(), group);
+      for (const auto& item : types.options)
+        context_->set_option(item.option, item.option == selected);
+      SaveTypeChoice(group, selected);
     }
   } else {
-    bool active = false;
-    for (const auto& other : input_types_.enabled)
-      active = active || ctx->get_option(other.option);
-    if (!active)
-      ctx->set_option(option, true);
+    type_groups_.clear();
   }
-  enforcing_input_type_ = false;
+  enforcing_type_group_ = false;
+}
+
+void ConcreteEngine::EnforceTypeOption(Context* ctx, const string& option) {
+  if (enforcing_type_group_ || !ctx)
+    return;
+  for (const auto& [group, types] : type_groups_) {
+    if (!types.Contains(option))
+      continue;
+    enforcing_type_group_ = true;
+    if (ctx->get_option(option)) {
+      for (const auto& other : types.options) {
+        if (other.option != option && ctx->get_option(other.option))
+          ctx->set_option(other.option, false);
+      }
+      SaveTypeChoice(group, option);
+    } else {
+      bool active = false;
+      for (const auto& other : types.options)
+        active = active || ctx->get_option(other.option);
+      if (!active)
+        ctx->set_option(option, true);
+    }
+    enforcing_type_group_ = false;
+    return;
+  }
 }
 
 void ConcreteEngine::OnPropertyUpdate(Context* ctx, const string& property) {
@@ -665,6 +694,8 @@ void ConcreteEngine::InitializeComponents() {
   if (!config)
     return;
 
+  InitializeTypeGroups();
+
   // Create components using inline template function
   CreateComponentsFromList<Processor>(this, config, "engine/processors",
                                       "processor", processors_);
@@ -702,20 +733,14 @@ void ConcreteEngine::InitializeComponents() {
 
 void ConcreteEngine::InitializeOptions() {
   LOG(INFO) << "ConcreteEngine::InitializeOptions";
-  LoadInputTypes();
-  const string initial = input_types_valid_
-                             ? input_types_.InitialOption(context_.get())
-                             : string();
-  enforcing_input_type_ = true;
-  for (const auto& item : input_types_.options)
-    context_->set_option(item.option, item.option == initial);
-  enforcing_input_type_ = false;
   // reset custom switches
   Config* config = schema_->config();
   Switches switches(config);
   switches.FindOption([this](Switches::SwitchOption option) {
-    if (input_types_.Contains(option.option_name))
-      return Switches::kContinue;
+    for (const auto& [group, types] : type_groups_) {
+      if (types.Contains(option.option_name))
+        return Switches::kContinue;
+    }
     LOG(INFO) << "found switch option: " << option.option_name
               << ", reset: " << option.reset_value;
     if (option.reset_value >= 0) {

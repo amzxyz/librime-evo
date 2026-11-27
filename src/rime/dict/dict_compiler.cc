@@ -331,48 +331,6 @@ uint64_t DictCompiler::EstimateMemory(const string& dict_name,
              : size * kEstimatedBytesPerSourceByte;
 }
 
-namespace {
-struct PrismRequests {
-  map<string, set<string>> shared;
-  map<string, set<string>> names;
-};
-
-bool CollectPrismRequests(Config* schema,
-                          const an<ConfigItem>& item,
-                          const string& scope,
-                          PrismRequests* result) {
-  if (scope == "build")
-    return true;
-  if (auto map = As<ConfigMap>(item)) {
-    if (auto dictionary = map->GetValue("dictionary")) {
-      PrismConfig prism;
-      if (!prism.Load(schema, scope))
-        return false;
-      const string name = dictionary->str();
-      if (!prism.name.empty())
-        result->names[name].insert(prism.name);
-      for (const auto& selected : prism.selections) {
-        result->names[name].insert(selected.name);
-        if (prism.follows_input_types)
-          result->shared[name].insert(selected.name);
-      }
-    }
-    for (const auto& child : *map) {
-      if (!CollectPrismRequests(
-              schema, child.second,
-              scope.empty() ? child.first : scope + "/" + child.first, result))
-        return false;
-    }
-  } else if (auto list = As<ConfigList>(item)) {
-    for (const auto& child : *list) {
-      if (!CollectPrismRequests(schema, child, scope, result))
-        return false;
-    }
-  }
-  return true;
-}
-}  // namespace
-
 bool DictCompiler::ReadDictionarySpecs(Config* schema,
                                        vector<DictionarySpec>* definitions) {
   if (!schema || !definitions || !PrismConfig::ValidateReferences(schema))
@@ -386,9 +344,6 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
     return false;
   }
 
-  PrismRequests requests;
-  if (!CollectPrismRequests(schema, schema->GetItem(""), "", &requests))
-    return false;
   hash_set<string> table_names;
   hash_set<string> prism_names;
   for (const auto& item : *dictionaries) {
@@ -440,24 +395,6 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
                    << "' algebra contains no groups";
         return false;
       }
-      set<string> wanted;
-      const bool selected = requests.shared.count(definition.name);
-      if (selected) {
-        for (const auto& name : requests.names[definition.name]) {
-          const string prefix = definition.name + ".";
-          const string group = name.compare(0, prefix.size(), prefix) == 0
-                                   ? name.substr(prefix.size())
-                                   : name;
-          if (!groups->HasKey(group)) {
-            if (!requests.shared[definition.name].count(name))
-              continue;  // Explicit references may use externally built prisms.
-            LOG(ERROR) << "build dictionary '" << definition.name
-                       << "' has no requested algebra group '" << group << "'";
-            return false;
-          }
-          wanted.insert(group);
-        }
-      }
       for (const auto& group : *groups) {
         auto rules = As<ConfigList>(group.second);
         if (group.first.empty() || !rules) {
@@ -465,9 +402,8 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
                      << definition.name << "'";
           return false;
         }
-        if (!selected || wanted.count(group.first))
-          definition.prisms.emplace_back(definition.name + "." + group.first,
-                                         rules);
+        definition.prisms.emplace_back(definition.name + "." + group.first,
+                                       rules);
       }
     } else {
       LOG(ERROR) << "build dictionary '" << definition.name
@@ -828,30 +764,6 @@ static bool BuildAuxiliaryDatabase(const ReverseLookupTable& sources,
   return database.Build(by_character, by_code, checksum) && database.Save();
 }
 
-namespace {
-void CollectAuxiliaryRequests(const an<ConfigItem>& item,
-                              const string& scope,
-                              set<string>* result) {
-  if (scope == "build")
-    return;
-  if (auto map = As<ConfigMap>(item)) {
-    if (map->GetValue("dictionary")) {
-      if (auto aux = map->GetValue("aux")) {
-        if (!aux->str().empty())
-          result->insert(aux->str());
-      }
-    }
-    for (const auto& child : *map)
-      CollectAuxiliaryRequests(
-          child.second, scope.empty() ? child.first : scope + "/" + child.first,
-          result);
-  } else if (auto list = As<ConfigList>(item)) {
-    for (const auto& child : *list)
-      CollectAuxiliaryRequests(child, scope, result);
-  }
-}
-}  // namespace
-
 bool DictCompiler::ReadAuxiliarySpecs(
     Config* schema,
     vector<pair<string, an<ConfigList>>>* groups) {
@@ -879,18 +791,9 @@ bool DictCompiler::ReadAuxiliarySpecs(
     LOG(ERROR) << "build/auxiliary/algebra must be a list or a map of lists";
     return false;
   }
-  InputTypesConfig types;
-  if (!types.Load(schema))
+  // Validate references without deriving compile tasks from consumers.
+  if (!PrismConfig::ValidateReferences(schema))
     return false;
-  if (!schema->IsNull("input_types")) {
-    set<string> requested;
-    CollectAuxiliaryRequests(schema->GetItem(""), "", &requested);
-    groups->erase(std::remove_if(groups->begin(), groups->end(),
-                                 [&](const auto& group) {
-                                   return !requested.count(group.first);
-                                 }),
-                  groups->end());
-  }
   return true;
 }
 

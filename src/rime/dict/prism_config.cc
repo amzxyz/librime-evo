@@ -8,38 +8,60 @@
 
 namespace rime {
 
-bool InputTypesConfig::Contains(const string& option) const {
+bool OptionGroupConfig::Contains(const string& option) const {
   return std::any_of(options.begin(), options.end(),
                      [&](const auto& item) { return item.option == option; });
 }
 
-bool InputTypesConfig::IsEnabled(const string& option) const {
-  return std::any_of(enabled.begin(), enabled.end(),
-                     [&](const auto& item) { return item.option == option; });
-}
-
-string InputTypesConfig::InitialOption(const Context* context) const {
-  if (!reset.empty())
-    return reset;
+string OptionGroupConfig::InitialOption(const Context* context) const {
   if (context) {
-    for (const auto& item : enabled) {
+    for (const auto& item : options) {
       if (context->get_option(item.option))
         return item.option;
     }
   }
-  return enabled.empty() ? string() : enabled.front().option;
+  return options.empty() ? string() : options.front().option;
 }
 
-bool InputTypesConfig::Load(Config* config) {
-  options.clear();
-  enabled.clear();
-  reset.clear();
-  if (!config || config->IsNull("input_types"))
+namespace {
+string ChoicePath(const string& schema, const string& group) {
+  return "var/type_groups/" + schema + "/" + group;
+}
+}  // namespace
+
+string OptionGroupConfig::RestoreChoice(Config* user,
+                                        const string& schema,
+                                        const string& group) const {
+  string selected;
+  if (user && user->GetString(ChoicePath(schema, group), &selected)) {
+    if (Contains(selected))
+      return selected;
+    if (!selected.empty())
+      return options.empty() ? string() : options.front().option;
+  }
+  return InitialOption(nullptr);
+}
+
+bool OptionGroupConfig::SaveChoice(Config* user,
+                                   const string& schema,
+                                   const string& group,
+                                   const string& option) {
+  if (!user || option.empty())
+    return false;
+  const string path = ChoicePath(schema, group);
+  string previous;
+  if (user->GetString(path, &previous) && previous == option)
     return true;
-  auto settings = config->GetMap("input_types");
-  auto list = settings ? As<ConfigList>(settings->Get("options")) : nullptr;
+  return user->SetString(path, option) && user->Save();
+}
+
+bool OptionGroupConfig::Load(Config* config, const string& group) {
+  options.clear();
+  if (!config || config->IsNull(group))
+    return true;
+  auto list = config->GetList(group);
   if (!list) {
-    LOG(ERROR) << "input_types/options must be a list";
+    LOG(ERROR) << group << " must be a list";
     return false;
   }
   set<string> names;
@@ -49,51 +71,39 @@ bool InputTypesConfig::Load(Config* config) {
     PrismConfig::Selection selection;
     if (!value || !value->GetString(&selection.option) ||
         selection.option.empty() || !names.insert(selection.option).second) {
-      LOG(ERROR) << "input_types/options require unique nonempty option names";
+      LOG(ERROR) << group << " requires unique nonempty option names";
       return false;
     }
     selection.name = selection.option;
-    if (entry->HasKey("name")) {
+    if (group == "input_types" && entry->HasKey("name")) {
       auto name = entry->GetValue("name");
       if (!name || !name->GetString(&selection.name) ||
           selection.name.empty()) {
-        LOG(ERROR) << "input_types/options name must be a nonempty prism name";
+        LOG(ERROR) << group << " name must be a nonempty prism name";
         return false;
       }
     }
     options.push_back(std::move(selection));
   }
-  if (settings->HasKey("enabled")) {
-    auto selected = As<ConfigList>(settings->Get("enabled"));
-    if (!selected) {
-      LOG(ERROR) << "input_types/enabled must be a list";
+  return true;
+}
+
+bool OptionGroupConfig::LoadGroups(Config* config,
+                                   map<string, OptionGroupConfig>* groups) {
+  groups->clear();
+  set<string> options;
+  for (const string group : {"input_types", "aux_types"}) {
+    OptionGroupConfig types;
+    if (!types.Load(config, group))
       return false;
-    }
-    set<string> unique;
-    for (const auto& item : *selected) {
-      auto value = As<ConfigValue>(item);
-      const string option = value ? value->str() : string();
-      if (!Contains(option) || !unique.insert(option).second) {
-        LOG(ERROR) << "unknown or repeated input_types/enabled option: "
-                   << option;
+    for (const auto& item : types.options) {
+      if (!options.insert(item.option).second) {
+        LOG(ERROR) << "option belongs to multiple type groups: " << item.option;
         return false;
       }
-      for (const auto& candidate : options) {
-        if (candidate.option == option) {
-          enabled.push_back(candidate);
-          break;
-        }
-      }
     }
-  } else {
-    enabled = options;
-  }
-  if (settings->HasKey("reset")) {
-    auto value = settings->GetValue("reset");
-    if (!value || !value->GetString(&reset) || !IsEnabled(reset)) {
-      LOG(ERROR) << "input_types/reset must name an enabled option";
-      return false;
-    }
+    if (!types.options.empty())
+      groups->emplace(group, std::move(types));
   }
   return true;
 }
@@ -122,12 +132,12 @@ bool PrismConfig::Load(Config* schema, const string& name_space) {
   if (auto reference = settings->GetValue("prisms")) {
     InputTypesConfig types;
     if (reference->str() != "input_types" || !types.Load(schema) ||
-        types.enabled.empty()) {
+        types.options.empty()) {
       LOG(ERROR) << name_space
                  << "/prisms requires a nonempty input_types group";
       return false;
     }
-    selections = std::move(types.enabled);
+    selections = std::move(types.options);
     follows_input_types = true;
     return true;
   }
@@ -163,6 +173,43 @@ bool ValidatePrismReferences(Config* schema,
       PrismConfig config;
       if (!config.Load(schema, path))
         return false;
+      if (auto dictionary = map->GetValue("dictionary")) {
+        auto builds = schema->GetMap("build/dictionaries");
+        auto definition =
+            builds ? As<ConfigMap>(builds->Get(dictionary->str())) : nullptr;
+        auto algebra =
+            definition ? As<ConfigMap>(definition->Get("algebra")) : nullptr;
+        if (config.follows_input_types && definition) {
+          const string prefix = dictionary->str() + ".";
+          for (const auto& selection : config.selections) {
+            string name = selection.name;
+            if (name.compare(0, prefix.size(), prefix) == 0)
+              name.erase(0, prefix.size());
+            if (!algebra || !algebra->HasKey(name)) {
+              LOG(ERROR) << path << ": missing prism algebra: " << name;
+              return false;
+            }
+          }
+        }
+        if (auto aux = map->GetValue("aux")) {
+          if (aux->str() == "aux_types") {
+            OptionGroupConfig types;
+            if (!types.Load(schema, "aux_types") || types.options.empty()) {
+              LOG(ERROR) << path << "/aux requires a nonempty aux_types group";
+              return false;
+            }
+            if (!schema->IsNull("build/auxiliary")) {
+              auto rules = schema->GetMap("build/auxiliary/algebra");
+              for (const auto& selection : types.options) {
+                if (!rules || !rules->HasKey(selection.name)) {
+                  LOG(ERROR) << "missing auxiliary algebra: " << selection.name;
+                  return false;
+                }
+              }
+            }
+          }
+        }
+      }
     }
     for (const auto& entry : *map) {
       if (path.empty() && entry.first == "build")
@@ -183,8 +230,8 @@ bool ValidatePrismReferences(Config* schema,
 }  // namespace
 
 bool PrismConfig::ValidateReferences(Config* config) {
-  InputTypesConfig types;
-  return config && types.Load(config) &&
+  map<string, OptionGroupConfig> groups;
+  return config && OptionGroupConfig::LoadGroups(config, &groups) &&
          ValidatePrismReferences(config, config->GetItem(""), "");
 }
 
