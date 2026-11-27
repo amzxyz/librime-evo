@@ -11,6 +11,8 @@
 #include <rime/dict/dict_compiler.h>
 #include <rime/dict/dict_settings.h>
 #include <rime/dict/dictionary.h>
+#include <rime/dict/prism.h>
+#include <rime/dict/table.h>
 #include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/engine.h>
@@ -66,6 +68,7 @@ version: "1.0"
   }
 
   void TearDown() override {
+    Service::instance().ReleasePrewarm();
     std::filesystem::remove(schema_path_);
     std::remove((schema_id_ + ".custom.yaml").c_str());
     for (const char* name : {"build_dict_test", "build_dict_other",
@@ -638,6 +641,46 @@ TEST_F(RimeBuildDictionaryTest, CustomPatchesNamedAlgebraAndAddsDictionary) {
   EXPECT_EQ("好", Lookup("build_dict_test", "zrm", "hk"));
   EXPECT_TRUE(Lookup("build_dict_test", "zrm", "hao").empty());
   EXPECT_EQ("号", Lookup("build_dict_other", "build_dict_other", "hao"));
+}
+
+TEST_F(RimeBuildDictionaryTest, PrewarmSharesReadOnlyDictionaryMappings) {
+  WriteSchema(kDefinitions, true);
+  Config config;
+  ASSERT_TRUE(config.LoadFromFile(schema_path_));
+  ASSERT_TRUE(config.SetString("translator/user_dict", schema_id_));
+  ASSERT_TRUE(config.SetString("translator/learning_mode", "auto"));
+  ASSERT_TRUE(config.SaveToFile(schema_path_));
+  SchemaUpdate update(schema_path_);
+  ASSERT_TRUE(update.Run(&Service::instance().deployer()));
+
+  auto api = rime_get_api();
+  RimeStringList files{};
+  ASSERT_TRUE(api->prewarm_schema(schema_id_.c_str(), &files));
+  set<string> names;
+  for (size_t i = 0; i < files.size; ++i) {
+    path file(files.list[i]);
+    EXPECT_TRUE(file.is_absolute());
+    names.insert(file.filename().u8string());
+  }
+  api->free_string_list(&files);
+  EXPECT_TRUE(names.count("build_dict_test.table.bin"));
+  EXPECT_TRUE(names.count("build_dict_test.pinyin.prism.bin"));
+  EXPECT_FALSE(std::filesystem::exists(path(schema_id_ + ".userdb")));
+
+  Schema schema(schema_id_);
+  auto* component = Dictionary::Require("dictionary");
+  ASSERT_TRUE(component);
+  the<Dictionary> dictionary(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_TRUE(dictionary->primary_table()->IsOpen());
+  EXPECT_TRUE(dictionary->prism()->IsOpen());
+  ASSERT_TRUE(dictionary->Load());
+  dictionary.reset();
+  api->release_prewarm();
+  dictionary.reset(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_FALSE(dictionary->primary_table()->IsOpen());
+  EXPECT_FALSE(dictionary->prism()->IsOpen());
 }
 
 TEST_F(RimeBuildDictionaryTest, RuntimeSwitchesDictionaryQualifiedPrisms) {

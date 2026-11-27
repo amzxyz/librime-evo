@@ -4,8 +4,8 @@
 #include <cfloat>
 #include <cstring>
 #include <sstream>
-#include <rime/dict/auxiliary_db.h>
 #include <mutex>
+#include <rime/dict/auxiliary_db.h>
 #include <rime/resource.h>
 #include <rime/service.h>
 
@@ -106,8 +106,10 @@ struct AuxiliaryPool {
 };
 
 AuxiliaryPool& SharedAuxiliaryPool() {
-  static AuxiliaryPool pool;
-  return pool;
+  // Service can release resources during static teardown. The weak pool
+  // itself is process-lifetime; its entries are cleared on every finalize.
+  static auto* pool = new AuxiliaryPool;
+  return *pool;
 }
 }  // namespace
 

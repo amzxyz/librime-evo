@@ -110,7 +110,7 @@ bool Service::PrewarmSchema(const string& schema_id, vector<string>* paths) {
   if (disabled() || deployer_.IsDeployingSchemas())
     return false;
   const auto id = schema_id.empty() ? InitialSchemaId() : schema_id;
-  if (!safe_path::ValidRelativeName(id) || id.front() == '.')
+  if (id.empty() || !safe_path::ValidRelativeName(id) || id.front() == '.')
     return false;
   if (prewarm_schema_ && prewarm_schema_->schema_id() == id) {
     *paths = prewarm_paths_;
@@ -127,7 +127,7 @@ bool Service::PrewarmSchema(const string& schema_id, vector<string>* paths) {
   if (!schema->config())
     return false;
   vector<an<void>> pins;
-  set<path> files;
+  vector<path> files;
   {
     ReadOnlyResourceCollector collector(&files);
     Engine::PrepareSchemaResources(schema.get(), &pins);

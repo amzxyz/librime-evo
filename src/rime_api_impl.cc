@@ -121,6 +121,7 @@ RIME_DEPRECATED Bool RimePrebuildAllSchemas() {
 
 RIME_DEPRECATED Bool RimeDeployWorkspace() {
   Deployer& deployer(Service::instance().deployer());
+  deployer.ResetDeploymentResult();
   return Bool(deployer.RunTask("installation_update") &&
               deployer.RunTask("workspace_update") &&
               deployer.RunTask("cleanup_trash"));
@@ -140,6 +141,7 @@ RIME_DEPRECATED Bool RimeDeployConfigFile(const char* file_name,
 
 RIME_DEPRECATED Bool RimeSyncUserData() {
   Service::instance().CleanupAllSessions();
+  Service::instance().ReleasePrewarm();
   Deployer& deployer(Service::instance().deployer());
   const bool installation = deployer.ScheduleTask("installation_update");
   const bool configs = deployer.ScheduleTask("backup_config_files");

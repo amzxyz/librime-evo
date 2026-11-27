@@ -14,10 +14,10 @@
 
 namespace rime {
 namespace {
-thread_local set<path>* resource_paths = nullptr;
+thread_local vector<path>* resource_paths = nullptr;
 }  // namespace
 
-ReadOnlyResourceCollector::ReadOnlyResourceCollector(set<path>* paths)
+ReadOnlyResourceCollector::ReadOnlyResourceCollector(vector<path>* paths)
     : previous_(resource_paths) {
   resource_paths = paths;
 }
@@ -31,8 +31,12 @@ void ReadOnlyResourceCollector::Record(const path& file) {
     return;
   std::error_code ec;
   auto absolute = std::filesystem::absolute(file, ec);
-  if (!ec)
-    resource_paths->insert(path(std::move(absolute)));
+  if (ec)
+    return;
+  path resolved(std::move(absolute));
+  if (std::find(resource_paths->begin(), resource_paths->end(), resolved) ==
+      resource_paths->end())
+    resource_paths->push_back(std::move(resolved));
 }
 
 class MappedFileImpl {

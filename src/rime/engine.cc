@@ -15,6 +15,7 @@
 #include <rime/dict/prism_config.h>
 #include <rime/dict/auxiliary_db.h>
 #include <rime/dict/dictionary.h>
+#include <rime/dict/mapped_file.h>
 #include <rime/dict/rewrite_store.h>
 #include <rime/gear/grammar.h>
 #include <rime/filter.h>
@@ -629,6 +630,27 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
     return;
   set<string> dictionaries, auxiliary, rewrites;
   bool grammar = false;
+  // Isolate optional resource failures. Collect only mappings associated
+  // with a successfully retained object; keep actual load order.
+  auto prepare = [&](const string& label, auto loader) {
+    try {
+      vector<path> files;
+      an<void> pin;
+      {
+        ReadOnlyResourceCollector collector(&files);
+        pin = loader();
+      }
+      if (!pin)
+        return;
+      for (const auto& file : files)
+        ReadOnlyResourceCollector::Record(file);
+      pins->push_back(std::move(pin));
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "prewarm '" << label << "' failed: " << ex.what();
+    } catch (...) {
+      LOG(WARNING) << "prewarm '" << label << "' failed.";
+    }
+  };
   auto add_rewrite = [&](const string& name_space) {
     string data;
     if (config->GetString(name_space + "/data", &data) && !data.empty())
@@ -653,9 +675,10 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
         auto* factory = Dictionary::Require("dictionary");
         if (factory && config->GetString(ns + "/dictionary", &name) &&
             !name.empty()) {
-          an<Dictionary> dict(factory->Create(ticket));
-          if (dict && dict->Load())
-            pins->push_back(std::move(dict));
+          prepare(name, [&]() -> an<void> {
+            an<Dictionary> dict(factory->Create(ticket));
+            return dict && dict->Load() ? dict : nullptr;
+          });
         }
       }
       string charset;
@@ -676,7 +699,7 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
           }
         }
       } else {
-        bool sentence = false, completion = false, contextual = false;
+        bool sentence = true, completion = false, contextual = false;
         config->GetBool(ns + "/enable_sentence", &sentence);
         config->GetBool(ns + "/sentence_over_completion", &completion);
         config->GetBool(ns + "/contextual_suggestions", &contextual);
@@ -692,29 +715,30 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
         continue;
       Ticket ticket(nullptr, "filter", prescription);
       if (ticket.klass == "rewriter") {
-        add_rewrite(ticket.name_space == "filter" ? "rewriter"
-                                                   : ticket.name_space);
+        const string ns =
+            ticket.name_space == "filter" ? "rewriter" : ticket.name_space;
+        add_rewrite(ns);
       }
     }
-  }
-  for (const auto& name : auxiliary) {
-    if (auto db = AuxiliaryDb::OpenShared(name))
-      pins->push_back(std::move(db));
-  }
-  for (const auto& name : rewrites) {
-    auto resource = RewriteResource::Require(name);
-    if (resource && resource->Acquire())
-      pins->push_back(std::move(resource));
   }
   string language;
   if (grammar && config->GetString("grammar/language", &language) &&
       !language.empty()) {
     if (auto* factory = Grammar::Require("grammar")) {
       // The grammar plugin itself resolves its model (.dlm, .gram, etc.).
-      an<Grammar> model(factory->Create(config));
-      if (model)
-        pins->push_back(std::move(model));
+      prepare(language, [&]() -> an<void> {
+        return an<Grammar>(factory->Create(config));
+      });
     }
+  }
+  for (const auto& name : auxiliary) {
+    prepare(name, [&]() -> an<void> { return AuxiliaryDb::OpenShared(name); });
+  }
+  for (const auto& name : rewrites) {
+    prepare(name, [&]() -> an<void> {
+      auto resource = RewriteResource::Require(name);
+      return resource && resource->Acquire() ? resource : nullptr;
+    });
   }
 }
 

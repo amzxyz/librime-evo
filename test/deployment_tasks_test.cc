@@ -652,6 +652,34 @@ TEST_F(RimeWorkspacePrismTest, NotifiesOnceForWholeSchemaBatch) {
   EXPECT_EQ(1, after);
 }
 
+TEST(RimeDeploymentLifecycleTest, PublicResultRetainsPartialSchemaStatus) {
+  auto& deployer = Service::instance().deployer();
+  EXPECT_FALSE(deployer.RunSchemaDeployment(
+      [](vector<string>* ids) {
+        *ids = {"good", "bad"};
+        return true;
+      },
+      [](DeploymentResult* result) {
+        result->successful_schemas.insert("good");
+        return false;
+      }));
+  auto api = rime_get_api();
+  RimeDeploymentResult result{};
+  ASSERT_TRUE(api->get_deployment_result(&result));
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(2u, result.schema_ids.size);
+  ASSERT_EQ(1u, result.successful_schemas.size);
+  ASSERT_EQ(1u, result.failed_schemas.size);
+  EXPECT_STREQ("good", result.successful_schemas.list[0]);
+  EXPECT_STREQ("bad", result.failed_schemas.list[0]);
+  api->free_deployment_result(&result);
+  EXPECT_FALSE(deployer.RunSchemaDeployment(
+      [](vector<string>*) { return false; },
+      [](DeploymentResult*) { return true; }));
+  EXPECT_FALSE(api->get_deployment_result(&result));
+  EXPECT_EQ(0u, result.schema_ids.size);
+}
+
 TEST(RimeDeploymentLifecycleTest, FailureAndObserverExceptionsAreReported) {
   Deployer deployer;
   const vector<string> ids{"first", "second"};

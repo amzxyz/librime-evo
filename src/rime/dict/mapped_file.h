@@ -83,7 +83,7 @@ struct List {
 // No collection or filesystem work on normal opens outside the scope.
 class ReadOnlyResourceCollector {
  public:
-  explicit ReadOnlyResourceCollector(set<path>* paths);
+  explicit ReadOnlyResourceCollector(vector<path>* paths);
   ~ReadOnlyResourceCollector();
   ReadOnlyResourceCollector(const ReadOnlyResourceCollector&) = delete;
   ReadOnlyResourceCollector& operator=(const ReadOnlyResourceCollector&) =
@@ -91,7 +91,7 @@ class ReadOnlyResourceCollector {
   static void Record(const path& file);
 
  private:
-  set<path>* previous_;
+  vector<path>* previous_;
 };
 
 class MappedFileImpl;
