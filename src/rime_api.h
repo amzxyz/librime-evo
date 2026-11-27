@@ -561,10 +561,10 @@ typedef struct RIME_FLAVORED(rime_api_t) {
   //! Enumerate options in schema order, including the effective selection.
   //! On success, release the returned array with free_type_options.
   Bool (*get_type_options)(RimeSessionId session_id,
-                            const char* schema_id,
-                            const char* group,
-                            RimeTypeOption** options,
-                            size_t* count);
+                           const char* schema_id,
+                           const char* group,
+                           RimeTypeOption** options,
+                           size_t* count);
   void (*free_type_options)(RimeTypeOption* options, size_t count);
   //! Apply an editor action to a candidate without synthesizing key events.
   //! Supported actions: auto_delete, manual_delete, manual_up, manual_down.

@@ -76,7 +76,8 @@ bool OptionGroupConfig::Load(Config* config, const string& group) {
     }
     selection.name = selection.option;
     auto label = entry->GetValue("label");
-    if (!label || !label->GetString(&selection.label) || selection.label.empty())
+    if (!label || !label->GetString(&selection.label) ||
+        selection.label.empty())
       selection.label = selection.option;
     if (group == "input_types" && entry->HasKey("name")) {
       auto name = entry->GetValue("name");

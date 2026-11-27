@@ -1132,7 +1132,8 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
   OptionGroupConfig types;
   if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
     return False;
-  const string selected = ResolveTypeOption(session_id, schema_id, group, types);
+  const string selected =
+      ResolveTypeOption(session_id, schema_id, group, types);
   if (selected.size() >= buffer_size)
     return False;
   selected.copy(option, selected.size());
@@ -1152,7 +1153,8 @@ static Bool RimeGetTypeOptions(RimeSessionId session_id,
   OptionGroupConfig types;
   if (!LoadTypeGroup(schema_id, group, &types))
     return False;
-  const string selected = ResolveTypeOption(session_id, schema_id, group, types);
+  const string selected =
+      ResolveTypeOption(session_id, schema_id, group, types);
   auto* items = new RimeTypeOption[types.options.size()]{};
   for (size_t i = 0; i < types.options.size(); ++i) {
     const auto& item = types.options[i];
@@ -1281,7 +1283,7 @@ static Bool RimeEditCandidate(RimeSessionId session_id,
     return False;
   const string name(action);
   const bool auto_delete = name == "auto_delete";
-  user_rank::EditAction edit;
+  auto edit = user_rank::EditAction::kResetManual;
   if (name == "manual_up") {
     edit = user_rank::EditAction::kMoveUp;
   } else if (name == "manual_down") {

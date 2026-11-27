@@ -178,8 +178,8 @@ aux_types:
   ASSERT_TRUE(user->Save());
   RimeTypeOption* items = nullptr;
   size_t count = 0;
-  ASSERT_TRUE(api->get_type_options(0, id.c_str(), "input_types", &items,
-                                    &count));
+  ASSERT_TRUE(
+      api->get_type_options(0, id.c_str(), "input_types", &items, &count));
   ASSERT_EQ(2u, count);
   EXPECT_STREQ("pinyin", items[0].option);
   EXPECT_STREQ("全拼", items[0].label);
@@ -196,13 +196,25 @@ aux_types:
   EXPECT_STREQ("aux_zrm", items[1].label);
   EXPECT_TRUE(items[1].selected);
   api->free_type_options(items, count);
-  EXPECT_FALSE(
-      api->get_type_options(0, id.c_str(), "unknown", &items, &count));
+  EXPECT_FALSE(api->get_type_options(0, id.c_str(), "unknown", &items, &count));
   EXPECT_EQ(nullptr, items);
   EXPECT_EQ(0u, count);
   ASSERT_TRUE(user->SetItem(path, nullptr));
   EXPECT_TRUE(user->Save());
   std::remove(filename.c_str());
+}
+
+TEST(TypeGroupsTest, CandidateEditRejectsMissingTarget) {
+  auto api = rime_get_api();
+  EXPECT_FALSE(api->edit_candidate(0, 0, True, "manual_up"));
+  const auto session = api->create_session();
+  ASSERT_NE(0u, session);
+  EXPECT_FALSE(api->edit_candidate(session, 0, True, "auto_delete"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "manual_delete"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "manual_down"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "unknown"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, nullptr));
+  api->destroy_session(session);
 }
 
 TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
