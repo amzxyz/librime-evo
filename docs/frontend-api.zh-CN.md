@@ -48,3 +48,5 @@
 ## 普通开关记忆
 
 `switcher/save_options` 已废弃，普通开关由方案的 `switches` 定义。初始化时有效 reset 优先，否则恢复 `var/schema_options/<schema_id>/<option>`；缺少记忆时布尔默认 false，单选组默认第一项。旧 `var/option` 仅作无独立记忆时的迁移输入，不再写入。单选组整组保存。临时 set_option、快捷键及 inline ASCII 不触发记忆。前端应在用户明确选择时调用 select_switch；类型组仍使用独立接口。不同方案切换时清理旧方案普通开关并在构建组件前恢复目标方案。
+
+旧 Lua/C++ 插件的 Switcher::IsAutoSave 查询保留，改为按当前方案普通开关定义判断，不再读取 save_options 白名单。
