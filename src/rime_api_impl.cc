@@ -11,6 +11,7 @@
 #include <rime/dict/prism_config.h>
 #include <rime/path_resolver.h>
 #include <rime/engine.h>
+#include <rime/gear/user_rank_actions.h>
 #include <rime/key_event.h>
 #include <rime/menu.h>
 #include <rime/module.h>
@@ -1272,6 +1273,50 @@ RIME_DEPRECATED Bool RimeDeleteCandidateOnCurrentPage(RimeSessionId session_id,
                                                  &Context::DeleteCandidate);
 }
 
+static Bool RimeEditCandidate(RimeSessionId session_id,
+                              size_t index,
+                              Bool on_current_page,
+                              const char* action) {
+  if (!action)
+    return False;
+  const string name(action);
+  const bool auto_delete = name == "auto_delete";
+  user_rank::EditAction edit;
+  if (name == "manual_up") {
+    edit = user_rank::EditAction::kMoveUp;
+  } else if (name == "manual_down") {
+    edit = user_rank::EditAction::kMoveDown;
+  } else if (name == "manual_delete") {
+    edit = user_rank::EditAction::kResetManual;
+  } else if (!auto_delete) {
+    return False;
+  }
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !session->engine() || !session->context())
+    return False;
+  auto* ctx = session->context();
+  if (!ctx->IsComposing() || !ctx->HasMenu())
+    return False;
+  auto& seg = ctx->composition().back();
+  if (on_current_page) {
+    auto* schema = session->schema();
+    if (!schema || schema->page_size() <= 0)
+      return False;
+    const size_t page_size = schema->page_size();
+    if (index >= page_size)
+      return False;
+    index += seg.selected_index / page_size * page_size;
+  }
+  if (index == size_t(-1) || !seg.GetCandidateAt(index))
+    return False;
+  if (auto_delete)
+    return Bool(ctx->DeleteCandidate(index));
+  // Use the exact validated candidate, without clamping an invalid index or
+  // emitting an intermediate selection notification before the edit.
+  seg.selected_index = index;
+  return Bool(user_rank::ApplyEditAction(session->engine(), ctx, edit));
+}
+
 static const char* RimeGetInput(RimeSessionId session_id) {
   an<Session> session(Service::instance().GetSession(session_id));
   if (!session)
@@ -1451,6 +1496,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.select_type_option = &RimeSelectTypeOption;
     s_api.get_type_options = &RimeGetTypeOptions;
     s_api.free_type_options = &RimeFreeTypeOptions;
+    s_api.edit_candidate = &RimeEditCandidate;
   }
   return &s_api;
 }

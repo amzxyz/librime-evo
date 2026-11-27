@@ -176,6 +176,7 @@ typedef struct rime_candidate_preview_t {
 #define RIME_EVO_CODE_CHOICES 1
 #define RIME_EVO_TYPE_GROUPS 1
 #define RIME_EVO_TYPE_OPTIONS 1
+#define RIME_CANDIDATE_EDIT_ACTIONS 1
 
 typedef struct rime_code_choice_t {
   size_t start;  // byte offset in raw input
@@ -565,6 +566,13 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                             RimeTypeOption** options,
                             size_t* count);
   void (*free_type_options)(RimeTypeOption* options, size_t count);
+  //! Apply an editor action to a candidate without synthesizing key events.
+  //! Supported actions: auto_delete, manual_delete, manual_up, manual_down.
+  //! True indicates the action was handled, not necessarily a database change.
+  Bool (*edit_candidate)(RimeSessionId session_id,
+                         size_t index,
+                         Bool on_current_page,
+                         const char* action);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry
