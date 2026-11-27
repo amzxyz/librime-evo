@@ -36,6 +36,7 @@ class RIME_DLL UserDictManager {
   bool SynchronizeAll();
 
  protected:
+  bool GetSyncUserDictList(UserDictList* names);
   bool SynchronizeMerge(const string& name);
   bool RestoreMerge(const path& snapshot_file,
                     const string& name,

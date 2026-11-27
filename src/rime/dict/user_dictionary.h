@@ -51,6 +51,7 @@ class RIME_DLL UserDictEntryIterator : public DictEntryFilterBinder {
 using UserDictEntryCollector = map<size_t, UserDictEntryIterator>;
 
 class Schema;
+class Config;
 class Table;
 class Prism;
 class Db;
@@ -173,9 +174,18 @@ class UserDictionary : public Class<UserDictionary, const Ticket&> {
   bool transaction_active_ = false;
 };
 
+struct UserDictionaryConfig {
+  string name;
+  string db_class = "userdb";
+  string mode = "auto";
+};
+
 class UserDictionaryComponent : public UserDictionary::Component {
  public:
   UserDictionaryComponent();
+  static bool ResolveConfig(Config* config,
+                            const string& name_space,
+                            UserDictionaryConfig* result);
   UserDictionary* Create(const Ticket& ticket);
   UserDictionary* Create(const string& dict_name, const string& db_class);
 

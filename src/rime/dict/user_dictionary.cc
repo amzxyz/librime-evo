@@ -893,39 +893,41 @@ UserDictionary* UserDictionaryComponent::Create(const string& dict_name,
   return new UserDictionary(dict_name, db, std::move(shared_tick));
 }
 
-UserDictionary* UserDictionaryComponent::Create(const Ticket& ticket) {
-  if (!ticket.schema)
-    return NULL;
-  Config* config = ticket.schema->config();
-  // 仅由 user_dict_mode 控制读写模式。
-  string mode("auto");
-  config->GetString(ticket.name_space + "/user_dict_mode", &mode);
-  if (mode == "off") {
-    return nullptr;
-  }
-  if (mode != "auto" && mode != "manual") {
+bool UserDictionaryComponent::ResolveConfig(Config* config,
+                                            const string& name_space,
+                                            UserDictionaryConfig* result) {
+  if (!config || !result)
+    return false;
+  UserDictionaryConfig resolved;
+  config->GetString(name_space + "/user_dict_mode", &resolved.mode);
+  if (resolved.mode == "off")
+    return false;
+  if (resolved.mode != "auto" && resolved.mode != "manual") {
     LOG(ERROR) << "invalid user_dict_mode for UserDB translator namespace="
-               << ticket.name_space << " mode=" << mode;
+               << name_space << " mode=" << resolved.mode;
+    return false;
+  }
+  if (!config->GetString(name_space + "/user_dict", &resolved.name)) {
+    string dictionary;
+    if (!config->GetString(name_space + "/dictionary", &dictionary)) {
+      LOG(ERROR) << name_space << "/dictionary not specified in schema.";
+      return false;
+    }
+    resolved.name = Language::get_language_component(dictionary);
+  }
+  config->GetString(name_space + "/db_class", &resolved.db_class);
+  *result = std::move(resolved);
+  return true;
+}
+
+UserDictionary* UserDictionaryComponent::Create(const Ticket& ticket) {
+  UserDictionaryConfig config;
+  if (!ticket.schema ||
+      !ResolveConfig(ticket.schema->config(), ticket.name_space, &config))
     return nullptr;
-  }
-  string dict_name;
-  if (config->GetString(ticket.name_space + "/user_dict", &dict_name)) {
-    // user specified name
-  } else if (config->GetString(ticket.name_space + "/dictionary", &dict_name)) {
-    // {dictionary: luna_pinyin.extra} implies {user_dict: luna_pinyin}
-    dict_name = Language::get_language_component(dict_name);
-  } else {
-    LOG(ERROR) << ticket.name_space << "/dictionary not specified in schema '"
-               << ticket.schema->schema_id() << "'.";
-    return NULL;
-  }
-  string db_class("userdb");
-  if (config->GetString(ticket.name_space + "/db_class", &db_class)) {
-    // user specified db class
-  }
-  auto user_dict = Create(dict_name, db_class);
+  auto user_dict = Create(config.name, config.db_class);
   if (user_dict)
-    user_dict->SetUserDictMode(mode);
+    user_dict->SetUserDictMode(config.mode);
   return user_dict;
 }
 

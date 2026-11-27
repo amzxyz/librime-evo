@@ -12,14 +12,18 @@
 #include <filesystem>
 #include <boost/scope_exit.hpp>
 #include <rime/common.h>
+#include <rime/config.h>
 #include <rime/deployer.h>
 #include <rime/algo/utilities.h>
 #include <rime/dict/db_utils.h>
 #include <rime/dict/user_db.h>
+#include <rime/dict/user_dictionary.h>
 #include <rime/dict/manual_stamp_codec.h>
 #include <rime/lever/user_dict_manager.h>
 #include <rime/dict/userdb_tsv.h>
 #include <rime/path_resolver.h>
+#include <rime/resource.h>
+#include <rime/ticket.h>
 
 namespace fs = std::filesystem;
 
@@ -617,9 +621,94 @@ bool UserDictManager::SynchronizeMerge(const string& name) {
   return success;
 }
 
+// Discover only the native user dictionaries referenced by enabled schemas.
+// Lua-created databases can share the same storage metadata without being
+// user dictionaries. Never infer synchronization eligibility from that alone.
+bool UserDictManager::GetSyncUserDictList(UserDictList* names) {
+  if (!names || !deployer_ || !user_db_component_)
+    return false;
+  names->clear();
+  FallbackResourceResolver defaults({"compiled_config", "", ".yaml"});
+  defaults.set_root_path(deployer_->staging_dir);
+  defaults.set_fallback_root_path(deployer_->prebuilt_data_dir);
+  Config config;
+  if (!config.LoadFromFile(defaults.ResolvePath("default"))) {
+    LOG(ERROR) << "UserDB sync cannot load deployed default config.";
+    return false;
+  }
+  auto schemas = config.GetList("schema_list");
+  if (!schemas) {
+    LOG(ERROR) << "UserDB sync: schema_list not defined.";
+    return false;
+  }
+  FallbackResourceResolver resolver({"compiled_schema", "", ".schema.yaml"});
+  resolver.set_root_path(deployer_->staging_dir);
+  resolver.set_fallback_root_path(deployer_->prebuilt_data_dir);
+  set<string> seen_schemas, referenced;
+  for (const auto& item : *schemas) {
+    auto entry = As<ConfigMap>(item);
+    auto id = entry ? entry->GetValue("schema") : nullptr;
+    if (!id || !safe_path::ValidRelativeName(id->str())) {
+      LOG(ERROR) << "UserDB sync: invalid schema_list entry.";
+      return false;
+    }
+    if (!seen_schemas.insert(id->str()).second)
+      continue;
+    Config schema;
+    if (!schema.LoadFromFile(resolver.ResolvePath(id->str()))) {
+      LOG(ERROR) << "UserDB sync cannot load deployed schema: " << id->str();
+      return false;
+    }
+    auto translators = schema.GetList("engine/translators");
+    if (!translators)
+      continue;
+    for (const auto& translator : *translators) {
+      auto spec = As<ConfigValue>(translator);
+      if (!spec) {
+        auto map = As<ConfigMap>(translator);
+        if (map)
+          spec = map->GetValue("name");
+      }
+      if (!spec)
+        continue;
+      // Conditions may be enabled later; discover all configured translators.
+      Ticket ticket(static_cast<Engine*>(nullptr), "translator", spec->str());
+      if (ticket.klass != "script_translator" &&
+          ticket.klass != "r10n_translator" &&
+          ticket.klass != "table_translator")
+        continue;
+      UserDictionaryConfig user_dict;
+      if (!UserDictionaryComponent::ResolveConfig(&schema, ticket.name_space,
+                                                  &user_dict) ||
+          user_dict.db_class != "userdb")
+        continue;
+      if (!safe_path::ValidRelativeName(user_dict.name)) {
+        LOG(ERROR) << "UserDB sync rejected invalid name: " << user_dict.name;
+        return false;
+      }
+      referenced.insert(user_dict.name);
+    }
+  }
+
+  // Preserve the existing local-database-only synchronization contract.
+  // The merge path validates metadata before opening a selected database.
+  for (const auto& name : referenced) {
+    the<Db> db(user_db_component_->Create(name));
+    if (!db || !safe_path::SafeDatabaseLocation(path_, db->file_path())) {
+      LOG(ERROR) << "UserDB sync rejected unsafe database: " << name;
+      return false;
+    }
+    if (db->Exists())
+      names->push_back(name);
+  }
+  LOG(INFO) << "UserDB sync discovery: referenced=" << referenced.size()
+            << " local=" << names->size();
+  return true;
+}
+
 bool UserDictManager::Synchronize(const string& dict_name) {
   UserDictList names;
-  if (!GetUserDictList(&names))
+  if (!GetSyncUserDictList(&names))
     return false;
   if (std::find(names.begin(), names.end(), dict_name) == names.end()) {
     LOG(WARNING) << "skipping non-UserDB synchronization request: "
@@ -635,7 +724,7 @@ bool UserDictManager::SynchronizeAll() {
     return false;
   }
   UserDictList names;
-  if (!GetUserDictList(&names))
+  if (!GetSyncUserDictList(&names))
     return false;
   if (names.empty()) {
     LOG(INFO) << "UserDB synchronization finished: no local UserDB found.";

@@ -7,7 +7,9 @@
 #include <rime/candidate.h>
 #include <rime/component.h>
 #include <rime/deployer.h>
+#include <rime/dict/level_db.h>
 #include <rime/dict/prism.h>
+#include <rime/dict/user_db.h>
 #include <rime/dict/rewrite_store.h>
 #include <rime/context.h>
 #include <rime/engine.h>
@@ -15,6 +17,7 @@
 #include <rime/segmentation.h>
 #include <rime/lever/build_compiler.h>
 #include <rime/lever/deployment_tasks.h>
+#include <rime/lever/user_dict_manager.h>
 #include <rime/service.h>
 #include <rime_api.h>
 #include <chrono>
@@ -199,6 +202,86 @@ build:
   Deployer& deployer_ = Service::instance().deployer();
   const fs::path root_ = fs::absolute("workspace_prism_test");
 };
+
+TEST_F(RimeWorkspacePrismTest, SyncsOnlyReferencedNativeUserDictionaries) {
+  const auto build = root_ / "build";
+  fs::create_directories(build);
+  std::ofstream(build / "default.yaml") << R"YAML(schema_list:
+  - schema: one
+  - schema: two
+)YAML";
+  std::ofstream(build / "one.schema.yaml") << R"YAML(engine:
+  translators:
+    - script_translator
+    - name: table_translator@english
+      when: ascii_mode
+    - script_translator@disabled
+    - lua_translator@statistics
+translator:
+  dictionary: shared.extra
+english:
+  dictionary: words
+  user_dict: en
+  user_dict_mode: manual
+disabled:
+  user_dict: disabled
+  user_dict_mode: off
+statistics:
+  user_dict: stats
+unused:
+  user_dict: unused
+)YAML";
+  std::ofstream(build / "two.schema.yaml") << R"YAML(engine:
+  translators:
+    - r10n_translator@another
+    - table_translator@missing
+    - table_translator@plain
+another:
+  user_dict: shared
+missing:
+  user_dict: missing
+plain:
+  user_dict: plain
+  db_class: plain_userdb
+)YAML";
+
+  using RankDb = UserDbWrapper<LevelDb>;
+  const auto names = {"shared", "en", "stats", "disabled", "unused", "plain"};
+  for (const string name : names) {
+    RankDb db(root_ / (name + ".userdb"), name);
+    ASSERT_TRUE(db.Open());
+    if (name == "stats") {
+      const string key = "statistics/day/20261126/commit_length/1 \t12345678";
+      ASSERT_TRUE(db.Update(key, "c=12 d=0 t=0"));
+    } else {
+      ASSERT_TRUE(db.Update("ni \t你", "1,0,0,0,0"));
+    }
+    ASSERT_TRUE(db.Close());
+  }
+
+  Deployer sync_deployer;
+  sync_deployer.user_data_dir = root_;
+  sync_deployer.staging_dir = build;
+  sync_deployer.prebuilt_data_dir = root_;
+  sync_deployer.sync_dir = root_ / "sync";
+  sync_deployer.user_id = "sync-test";
+  UserDictManager manager(&sync_deployer);
+  ASSERT_TRUE(manager.SynchronizeAll());
+  const auto snapshots = sync_deployer.user_data_sync_dir();
+  EXPECT_TRUE(fs::exists(snapshots / "shared.userdb.tsv"));
+  EXPECT_TRUE(fs::exists(snapshots / "en.userdb.tsv"));
+  for (const string name : {"stats", "disabled", "unused", "plain", "missing"})
+    EXPECT_FALSE(fs::exists(snapshots / (name + ".userdb.tsv")));
+  EXPECT_FALSE(manager.Synchronize("stats"));
+
+  RankDb stats(root_ / "stats.userdb", "stats");
+  ASSERT_TRUE(stats.OpenReadOnly());
+  string value;
+  ASSERT_TRUE(stats.Fetch("statistics/day/20261126/commit_length/1 \t12345678",
+                          &value));
+  EXPECT_EQ("c=12 d=0 t=0", value);
+  ASSERT_TRUE(stats.Close());
+}
 
 TEST_F(RimeWorkspacePrismTest, SharesPrismOnlyWhenAlgebraMatches) {
   WriteSecondSchema("ab");
