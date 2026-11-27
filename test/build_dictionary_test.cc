@@ -955,8 +955,19 @@ translator:
       << "毫\thao\t150\n";
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   auto engine = OpenEngine();
-  the<Translator> translator(Translator::Require("table_translator")
-                                 ->Create(Ticket(engine.get(), "translator")));
+  Ticket ticket(engine.get(), "translator");
+  auto* factory = Dictionary::Require("dictionary");
+  ASSERT_TRUE(factory);
+  the<Dictionary> first(factory->Create(ticket));
+  the<Dictionary> second(factory->Create(ticket));
+  ASSERT_TRUE(first && second);
+  ASSERT_TRUE(first->Load());
+  ASSERT_TRUE(second->Load());
+  ASSERT_EQ(2u, first->tables().size());
+  ASSERT_EQ(2u, second->tables().size());
+  EXPECT_EQ(first->tables()[1], second->tables()[1]);
+  the<Translator> translator(
+      Translator::Require("table_translator")->Create(ticket));
   ASSERT_TRUE(translator);
   const auto candidates = Query(translator.get(), "hk");
   EXPECT_NE(string::npos, candidates.find("好"));

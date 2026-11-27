@@ -109,11 +109,11 @@ class Deployer : public Messenger {
                         TaskInitializer arg = TaskInitializer());
   bool ScheduleTask(const string& task_name,
                     TaskInitializer arg = TaskInitializer());
-  void ScheduleTask(an<DeploymentTask> task);
+  RIME_DLL void ScheduleTask(an<DeploymentTask> task);
   an<DeploymentTask> NextTask();
   bool HasPendingTasks();
 
-  bool Run();
+  RIME_DLL bool Run();
   bool StartWork(bool maintenance_mode = false);
   bool StartMaintenance();
   bool IsWorking();

@@ -178,6 +178,7 @@ typedef struct rime_candidate_preview_t {
 #define RIME_EVO_TYPE_OPTIONS 1
 #define RIME_CANDIDATE_EDIT_ACTIONS 1
 #define RIME_SCHEMA_PREWARM 1
+#define RIME_DEPLOYMENT_FAILURE_SCOPE 1
 
 typedef struct rime_code_choice_t {
   size_t start;  // byte offset in raw input
@@ -249,7 +250,6 @@ typedef struct rime_deployment_result_t {
   RimeStringList schema_ids;
   RimeStringList successful_schemas;
   RimeStringList failed_schemas;
-  Bool other_task_failed;
 } RimeDeploymentResult;
 
 typedef struct rime_string_slice_t {
@@ -599,6 +599,8 @@ typedef struct RIME_FLAVORED(rime_api_t) {
   Bool (*prewarm_schema)(const char* schema_id, RimeStringList* paths);
   void (*free_string_list)(RimeStringList* list);
   void (*release_prewarm)(void);
+  //! True for an independent maintenance task failure or unknown result.
+  Bool (*deployment_has_other_failure)(void);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

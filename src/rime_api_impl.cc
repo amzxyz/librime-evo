@@ -1364,11 +1364,22 @@ static Bool RimeGetDeploymentResult(RimeDeploymentResult* result) {
     CopyStringList(snapshot->successful_schemas, &result->successful_schemas);
     CopyStringList(snapshot->failed_schemas, &result->failed_schemas);
     result->success = Bool(snapshot->success);
-    result->other_task_failed = Bool(snapshot->other_task_failed);
     return True;
   } catch (...) {
     RimeFreeDeploymentResult(result);
     return False;
+  }
+}
+
+static Bool RimeDeploymentHasOtherFailure() {
+  try {
+    auto& deployer = Service::instance().deployer();
+    if (deployer.IsWorking() || deployer.IsDeployingSchemas())
+      return True;
+    auto snapshot = deployer.LastDeploymentResult();
+    return Bool(!snapshot || snapshot->other_task_failed);
+  } catch (...) {
+    return True;
   }
 }
 
@@ -1597,6 +1608,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.prewarm_schema = &RimePrewarmSchema;
     s_api.free_string_list = &RimeFreeStringList;
     s_api.release_prewarm = &RimeReleasePrewarm;
+    s_api.deployment_has_other_failure = &RimeDeploymentHasOtherFailure;
   }
   return &s_api;
 }
