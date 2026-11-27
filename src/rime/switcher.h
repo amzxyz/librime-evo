@@ -35,8 +35,6 @@ class Switcher : public Processor, public Engine {
   Schema* CreateSchema();
   static string InitialSchemaId(Config* config, Config* user);
   void SelectNextSchema();
-  // Legacy plugin query; now derived from the current schema's switches.
-  bool IsAutoSave(const string& option) const;
 
   void RefreshMenu();
   void Activate();

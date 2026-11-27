@@ -14,7 +14,6 @@
 #include <rime/processor.h>
 #include <rime/schema.h>
 #include <rime/switcher.h>
-#include <rime/switches.h>
 #include <rime/ticket.h>
 #include <rime/translation.h>
 #include <rime/translator.h>
@@ -204,16 +203,6 @@ void Switcher::SelectNextSchema() {
   command->Apply(this);
 }
 
-bool Switcher::IsAutoSave(const string& option) const {
-  if (!engine_ || !engine_->schema() || option.empty() ||
-      option.front() == '_' || option.find('/') != string::npos)
-    return false;
-  auto* config = engine_->schema()->config();
-  if (!config)
-    return false;
-  auto selected = Switches(config).OptionByName(option);
-  return selected.found() && selected.reset_value < 0;
-}
 
 void Switcher::OnSelect(Context* ctx) {
   LOG(INFO) << "a switcher option is selected.";

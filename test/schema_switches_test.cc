@@ -64,24 +64,27 @@ TEST(SchemaSwitchesTest, IsolatedSelectionAndTemporaryState) {
   EXPECT_TRUE(user->Save());
 }
 
-TEST(SchemaSwitchesTest, ResetAndLegacyMigration) {
+TEST(SchemaSwitchesTest, ResetWithoutLegacyMigration) {
   the<Config> user(Config::Require("user_config")->Create("user"));
   const string path = "var/schema_options/switch_test_reset";
   user->SetItem(path, nullptr);
-  user->SetBool("var/option/scoped_emoji", false);
-  user->SetBool("var/option/scoped_a", true);
+  user->SetBool("var/option/scoped_emoji", true);
+  user->SetBool("var/option/scoped_a", false);
   user->SetBool("var/option/scoped_b", true);
   the<Engine> engine(Engine::Create());
   engine->ApplySchema(MakeSwitchSchema("switch_test_reset"));
   auto* ctx = engine->context();
+  // Legacy global values are ignored: toggles start false, radio starts first.
   EXPECT_FALSE(ctx->get_option("scoped_emoji"));
   EXPECT_TRUE(ctx->get_option("scoped_a"));
   EXPECT_FALSE(ctx->get_option("scoped_b"));
-  bool saved = true;
-  EXPECT_TRUE(user->GetBool(path + "/scoped_emoji", &saved));
-  EXPECT_FALSE(saved);
-  EXPECT_TRUE(user->GetBool(path + "/scoped_b", &saved));
-  EXPECT_FALSE(saved);
+  bool saved = false;
+  EXPECT_FALSE(user->GetBool(path + "/scoped_emoji", &saved));
+  EXPECT_FALSE(user->GetBool(path + "/scoped_a", &saved));
+  EXPECT_FALSE(user->GetBool(path + "/scoped_b", &saved));
+
+  EXPECT_TRUE(engine->SelectSwitch("scoped_emoji", true));
+  EXPECT_TRUE(engine->SelectSwitch("scoped_b", true));
   engine->ApplySchema(MakeSwitchSchema("switch_test_reset", true));
   EXPECT_TRUE(ctx->get_option("scoped_emoji"));
   EXPECT_TRUE(ctx->get_option("scoped_b"));
@@ -91,9 +94,9 @@ TEST(SchemaSwitchesTest, ResetAndLegacyMigration) {
   EXPECT_TRUE(ctx->get_option("scoped_emoji"));
   EXPECT_TRUE(ctx->get_option("scoped_b"));
   engine->ApplySchema(MakeSwitchSchema("switch_test_reset"));
-  EXPECT_FALSE(ctx->get_option("scoped_emoji"));
-  EXPECT_TRUE(ctx->get_option("scoped_a"));
-  EXPECT_FALSE(ctx->get_option("scoped_b"));
+  EXPECT_TRUE(ctx->get_option("scoped_emoji"));
+  EXPECT_TRUE(ctx->get_option("scoped_b"));
+
   user->SetItem(path, nullptr);
   user->SetItem("var/option/scoped_emoji", nullptr);
   user->SetItem("var/option/scoped_a", nullptr);

@@ -925,7 +925,7 @@ void ConcreteEngine::InitializeOptions() {
   auto* user = switcher_ ? switcher_->user_config() : nullptr;
   const auto& schema_id = schema_->schema_id();
   Switches switches(config);
-  bool migrated = false;
+  bool changed = false;
   switches.FindOption([&](SwitchOption first) {
     if (first.option_index != 0)
       return Switches::kContinue;
@@ -948,25 +948,14 @@ void ConcreteEngine::InitializeOptions() {
                           !schema_id.empty() &&
                           schema_id.find('/') == string::npos;
     vector<bool> values(members.size(), false);
-    bool scoped = false, legacy = false;
+    bool has_saved_value = false;
     if (remember && user) {
       for (size_t i = 0; i < members.size(); ++i) {
         bool saved = false;
         if (user->GetBool(SwitchPath(schema_id, members[i].option_name),
                           &saved)) {
           values[i] = saved;
-          scoped = true;
-        }
-      }
-      // Old global values are migration input only. Never mix a scoped
-      // radio group with a partially saved legacy group.
-      if (!scoped) {
-        for (size_t i = 0; i < members.size(); ++i) {
-          bool saved = false;
-          if (user->GetBool("var/option/" + members[i].option_name, &saved)) {
-            values[i] = saved;
-            legacy = true;
-          }
+          has_saved_value = true;
         }
       }
     }
@@ -989,13 +978,13 @@ void ConcreteEngine::InitializeOptions() {
       if (!members[i].option_name.empty())
         context_->set_option(members[i].option_name, values[i]);
     }
-    if (remember && (legacy || (radio && scoped))) {
-      migrated |= SaveSwitchValues(user, schema_id, members, values);
-    }
+    // Normalize a previously saved radio group to exactly one selection.
+    if (remember && radio && has_saved_value)
+      changed |= SaveSwitchValues(user, schema_id, members, values);
     return Switches::kContinue;
   });
-  if (migrated && !user->Save())
-    LOG(ERROR) << "cannot save migrated switches";
+  if (changed && user && !user->Save())
+    LOG(ERROR) << "cannot normalize saved switches";
 }
 
 bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
