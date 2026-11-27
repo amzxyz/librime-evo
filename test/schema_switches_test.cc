@@ -11,15 +11,17 @@ namespace {
 
 Schema* MakeSwitchSchema(const string& id, bool reset = false) {
   auto config = new Config;
-  std::istringstream yaml(reset ? R"(
+  const char* forced = R"(
 switches:
   - {name: scoped_emoji, reset: 1}
   - {options: [scoped_a, scoped_b], reset: 1}
-)" : R"(
+)";
+  const char* remembered = R"(
 switches:
   - {name: scoped_emoji}
   - {options: [scoped_a, scoped_b]}
-)");
+)";
+  std::istringstream yaml(reset ? forced : remembered);
   EXPECT_TRUE(config->LoadFromStream(yaml));
   return new Schema(id, config);
 }

@@ -870,8 +870,7 @@ namespace {
 
 using SwitchOption = Switches::SwitchOption;
 
-vector<SwitchOption> SwitchMembers(Switches& switches,
-                                  const SwitchOption& first) {
+vector<SwitchOption> SwitchMembers(Switches& switches, const SwitchOption& first) {
   vector<SwitchOption> members;
   switches.FindOption([&](SwitchOption option) {
     if (option.switch_index == first.switch_index)
@@ -882,8 +881,7 @@ vector<SwitchOption> SwitchMembers(Switches& switches,
 }
 
 bool PublicSwitchName(const string& name) {
-  return !name.empty() && name.front() != '_' &&
-         name.find('/') == string::npos;
+  return !name.empty() && name.front() != '_' && name.find('/') == string::npos;
 }
 
 string SwitchPath(const string& schema, const string& option) {
@@ -932,22 +930,23 @@ void ConcreteEngine::InitializeOptions() {
     if (first.option_index != 0)
       return Switches::kContinue;
     auto members = SwitchMembers(switches, first);
+    // Type groups have their own exclusive selection and persistence.
     for (const auto& member : members) {
-      // Type groups have their own exclusive selection and persistence.
       if (IsTypeOption(member.option_name))
         return Switches::kContinue;
+    }
+    bool public_names = true;
+    for (const auto& member : members) {
+      public_names &= PublicSwitchName(member.option_name);
       if (!member.option_name.empty())
         schema_switches_.insert(member.option_name);
     }
     if (members.empty())
       return Switches::kContinue;
     const bool radio = first.type == Switches::kRadioGroup;
-    const bool remember =
-        first.reset_value < 0 && !schema_id.empty() &&
-        schema_id.find('/') == string::npos &&
-        std::all_of(members.begin(), members.end(), [](const auto& member) {
-          return PublicSwitchName(member.option_name);
-        });
+    const bool remember = first.reset_value < 0 && public_names &&
+                          !schema_id.empty() &&
+                          schema_id.find('/') == string::npos;
     vector<bool> values(members.size(), false);
     bool scoped = false, legacy = false;
     if (remember && user) {
@@ -1020,8 +1019,8 @@ bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
   vector<string> changed;
   applying_switch_ = true;
   for (const auto& member : members) {
-    const bool next = radio ? member.option_index == selected.option_index
-                            : value;
+    const bool selected_member = member.option_index == selected.option_index;
+    const bool next = radio ? selected_member : value;
     values.push_back(next);
     if (context_->get_option(member.option_name) != next) {
       context_->set_option(member.option_name, next);
