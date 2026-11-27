@@ -37,17 +37,6 @@ Switcher::~Switcher() {
   }
 }
 
-void Switcher::RestoreSavedOptions() {
-  if (user_config_) {
-    for (const string& option_name : save_options_) {
-      bool value = false;
-      if (user_config_->GetBool("var/option/" + option_name, &value)) {
-        engine_->context()->set_option(option_name, value);
-      }
-    }
-  }
-}
-
 ProcessResult Switcher::ProcessKeyEvent(const KeyEvent& key_event) {
   for (const KeyEvent& hotkey : hotkeys_) {
     if (key_event == hotkey) {
@@ -171,13 +160,14 @@ void Switcher::SetActiveSchema(const string& schema_id) {
   }
 }
 
-Schema* Switcher::CreateSchema() {
-  Config* config = schema_->config();
+string Switcher::InitialSchemaId(Config* config, Config* user) {
   if (!config)
-    return nullptr;
+    return {};
+  bool fixed = false;
+  config->GetBool("switcher/fix_schema_list_order", &fixed);
   string previous;
-  if (user_config_ && !fix_schema_list_order_) {
-    user_config_->GetString("var/previously_selected_schema", &previous);
+  if (user && !fixed) {
+    user->GetString("var/previously_selected_schema", &previous);
   }
   string recent;
   ForEachSchemaListEntry(config, [&previous, &recent](const string& schema_id) {
@@ -189,10 +179,12 @@ Schema* Switcher::CreateSchema() {
       recent = schema_id;
     return /* continue = */ true;
   });
-  if (recent.empty())
-    return nullptr;
-  else
-    return new Schema(recent);
+  return recent;
+}
+
+Schema* Switcher::CreateSchema() {
+  const auto id = InitialSchemaId(schema_->config(), user_config_.get());
+  return id.empty() ? nullptr : new Schema(id);
 }
 
 void Switcher::SelectNextSchema() {
@@ -209,10 +201,6 @@ void Switcher::SelectNextSchema() {
   if (!command)
     return;
   command->Apply(this);
-}
-
-bool Switcher::IsAutoSave(const string& option) const {
-  return save_options_.find(option) != save_options_.end();
 }
 
 void Switcher::OnSelect(Context* ctx) {
@@ -275,15 +263,6 @@ void Switcher::LoadSettings() {
       if (!value)
         continue;
       hotkeys_.push_back(KeyEvent(value->str()));
-    }
-  }
-  if (auto options = config->GetList("switcher/save_options")) {
-    save_options_.clear();
-    for (auto it = options->begin(); it != options->end(); ++it) {
-      auto option_name = As<ConfigValue>(*it);
-      if (!option_name)
-        continue;
-      save_options_.insert(option_name->str());
     }
   }
   config->GetBool("switcher/fold_options", &fold_options_);

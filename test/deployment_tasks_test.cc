@@ -652,6 +652,69 @@ TEST_F(RimeWorkspacePrismTest, NotifiesOnceForWholeSchemaBatch) {
   EXPECT_EQ(1, after);
 }
 
+TEST(RimeDeploymentLifecycleTest, PublicResultRetainsPartialSchemaStatus) {
+  auto& deployer = Service::instance().deployer();
+  EXPECT_FALSE(deployer.RunSchemaDeployment(
+      [](vector<string>* ids) {
+        *ids = {"good", "bad"};
+        return true;
+      },
+      [](DeploymentResult* result) {
+        result->successful_schemas.insert("good");
+        return false;
+      }));
+  auto api = rime_get_api();
+  RimeDeploymentResult result{};
+  ASSERT_TRUE(api->get_deployment_result(&result));
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(2u, result.schema_ids.size);
+  ASSERT_EQ(1u, result.successful_schemas.size);
+  ASSERT_EQ(1u, result.failed_schemas.size);
+  EXPECT_STREQ("good", result.successful_schemas.list[0]);
+  EXPECT_STREQ("bad", result.failed_schemas.list[0]);
+  api->free_deployment_result(&result);
+  auto select_failure = [](vector<string>*) { return false; };
+  auto work = [](DeploymentResult*) { return true; };
+  EXPECT_FALSE(deployer.RunSchemaDeployment(select_failure, work));
+  EXPECT_FALSE(api->get_deployment_result(&result));
+  EXPECT_EQ(0u, result.schema_ids.size);
+}
+
+TEST(RimeDeploymentLifecycleTest, PartialResultDistinguishesOtherTaskFailure) {
+  class PartialTask : public DeploymentTask {
+   public:
+    bool Run(Deployer* deployer) override {
+      auto select = [](vector<string>* ids) {
+        *ids = {"good", "bad"};
+        return true;
+      };
+      auto work = [](DeploymentResult* result) {
+        result->successful_schemas.insert("good");
+        return false;
+      };
+      return deployer->RunSchemaDeployment(select, work);
+    }
+  };
+  class FailedTask : public DeploymentTask {
+   public:
+    bool Run(Deployer*) override { return false; }
+  };
+  Deployer deployer;
+  deployer.ScheduleTask(New<PartialTask>());
+  EXPECT_FALSE(deployer.Run());
+  auto result = deployer.LastDeploymentResult();
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->other_task_failed);
+
+  deployer.ScheduleTask(New<PartialTask>());
+  deployer.ScheduleTask(New<FailedTask>());
+  EXPECT_FALSE(deployer.Run());
+  result = deployer.LastDeploymentResult();
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->other_task_failed);
+  EXPECT_EQ(1u, result->successful_schemas.count("good"));
+}
+
 TEST(RimeDeploymentLifecycleTest, FailureAndObserverExceptionsAreReported) {
   Deployer deployer;
   const vector<string> ids{"first", "second"};

@@ -175,6 +175,11 @@ typedef struct rime_candidate_preview_t {
 
 #define RIME_EVO_CODE_CHOICES 1
 #define RIME_EVO_TYPE_GROUPS 1
+#define RIME_EVO_TYPE_OPTIONS 1
+#define RIME_CANDIDATE_EDIT_ACTIONS 1
+#define RIME_SCHEMA_PREWARM 1
+#define RIME_DEPLOYMENT_FAILURE_SCOPE 1
+#define RIME_SCHEMA_SWITCH_SELECTION 1
 
 typedef struct rime_code_choice_t {
   size_t start;  // byte offset in raw input
@@ -182,6 +187,13 @@ typedef struct rime_code_choice_t {
   char* label;
   char* replacement;
 } RimeCodeChoice;
+
+//! A display-ready entry in a schema's exclusive type group.
+typedef struct rime_type_option_t {
+  char* option;
+  char* label;
+  Bool selected;
+} RimeTypeOption;
 
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
@@ -228,6 +240,18 @@ typedef struct rime_schema_list_t {
   size_t size;
   RimeSchemaListItem* list;
 } RimeSchemaList;
+
+typedef struct rime_string_list_t {
+  size_t size;
+  char** list;
+} RimeStringList;
+
+typedef struct rime_deployment_result_t {
+  Bool success;
+  RimeStringList schema_ids;
+  RimeStringList successful_schemas;
+  RimeStringList failed_schemas;
+} RimeDeploymentResult;
 
 typedef struct rime_string_slice_t {
   const char* str;
@@ -549,6 +573,41 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                              const char* schema_id,
                              const char* group,
                              const char* option);
+  //! Enumerate options in schema order, including the effective selection.
+  //! On success, release the returned array with free_type_options.
+  Bool (*get_type_options)(RimeSessionId session_id,
+                           const char* schema_id,
+                           const char* group,
+                           RimeTypeOption** options,
+                           size_t* count);
+  void (*free_type_options)(RimeTypeOption* options, size_t count);
+  //! Apply an editor action to a candidate without synthesizing key events.
+  //! Supported actions: auto_delete, manual_delete, manual_up, manual_down.
+  //! True indicates the action was handled, not necessarily a database change.
+  Bool (*edit_candidate)(RimeSessionId session_id,
+                         size_t index,
+                         Bool on_current_page,
+                         const char* action);
+  //! Latest completed schema deployment in this initialization; false when
+  //! no result exists. This reports compilation, not runtime readiness.
+  Bool (*get_deployment_result)(RimeDeploymentResult* result);
+  void (*free_deployment_result)(RimeDeploymentResult* result);
+  //! Schema that the next session will initially select.
+  Bool (*get_initial_schema)(char* schema_id, size_t buffer_size);
+  //! Prepare read-only resources before creating a session. Returned paths
+  //! are actual mapped files; a frontend may warm their pages asynchronously.
+  //! Null/empty schema_id selects the initial schema. No UserDB is opened.
+  Bool (*prewarm_schema)(const char* schema_id, RimeStringList* paths);
+  void (*free_string_list)(RimeStringList* list);
+  void (*release_prewarm)(void);
+  //! True for an independent maintenance task failure or unknown result.
+  Bool (*deployment_has_other_failure)(void);
+  //! Explicit selection of a declared switch in the active schema. Reset
+  //! switches are not saved; radio false is a handled no-op. Returns false
+  //! for undeclared/internal/type-group options. set_option stays temporary.
+  Bool (*select_switch)(RimeSessionId session_id,
+                        const char* option,
+                        Bool value);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

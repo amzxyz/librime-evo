@@ -11,6 +11,7 @@
 #include <exception>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <any>
 #include <rime/common.h>
@@ -58,6 +59,8 @@ struct DeploymentResult {
   set<string> successful_schemas;
   set<string> failed_schemas;
   bool success = false;
+  // Populated for the public snapshot after the maintenance task batch.
+  bool other_task_failed = false;
 };
 
 class Deployer : public Messenger {
@@ -80,6 +83,11 @@ class Deployer : public Messenger {
       const function<bool(vector<string>*)>& select,
       const function<bool(DeploymentResult*)>& work);
 
+  // Snapshot of the latest schema deployment, not a runtime load result.
+  RIME_DLL std::optional<DeploymentResult> LastDeploymentResult();
+  void ResetDeploymentResult();
+  bool IsDeployingSchemas() const { return deploying_schemas_.load(); }
+
   // read-only access after library initialization {
   path shared_data_dir;
   path user_data_dir;
@@ -101,11 +109,11 @@ class Deployer : public Messenger {
                         TaskInitializer arg = TaskInitializer());
   bool ScheduleTask(const string& task_name,
                     TaskInitializer arg = TaskInitializer());
-  void ScheduleTask(an<DeploymentTask> task);
+  RIME_DLL void ScheduleTask(an<DeploymentTask> task);
   an<DeploymentTask> NextTask();
   bool HasPendingTasks();
 
-  bool Run();
+  RIME_DLL bool Run();
   bool StartWork(bool maintenance_mode = false);
   bool StartMaintenance();
   bool IsWorking();
@@ -120,6 +128,9 @@ class Deployer : public Messenger {
   BeforeDeployNotifier before_deploy_;
   AfterDeployNotifier after_deploy_;
   std::atomic<bool> deploying_schemas_{false};
+  std::mutex deployment_result_mutex_;
+  std::optional<DeploymentResult> deployment_result_;
+  size_t deployment_result_revision_ = 0;
   std::queue<of<DeploymentTask>> pending_tasks_;
   std::mutex mutex_;
   std::future<void> work_;

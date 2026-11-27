@@ -168,3 +168,7 @@ Contributors
   - [hchunhui](https://github.com/hchunhui)
   - [Qijia Liu](https://github.com/eagleoflqj)
   - [WhiredPlanck](https://github.com/WhiredPlanck)
+
+### Frontend integration
+
+- [前端接入、扩展 API 与公共 C ABI 约定](docs/frontend-api.zh-CN.md)

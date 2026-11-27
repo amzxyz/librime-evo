@@ -11,6 +11,7 @@
 #include <rime/dict/prism_config.h>
 #include <rime/path_resolver.h>
 #include <rime/engine.h>
+#include <rime/gear/user_rank_actions.h>
 #include <rime/key_event.h>
 #include <rime/menu.h>
 #include <rime/module.h>
@@ -68,6 +69,7 @@ RIME_DEPRECATED void RimeFinalize() {
 RIME_DEPRECATED Bool RimeStartMaintenance(Bool full_check) {
   LoadModules(kDeployerModules);
   Deployer& deployer(Service::instance().deployer());
+  deployer.ResetDeploymentResult();
   deployer.RunTask("clean_old_log_files");
   if (!deployer.RunTask("installation_update")) {
     return False;
@@ -119,6 +121,7 @@ RIME_DEPRECATED Bool RimePrebuildAllSchemas() {
 
 RIME_DEPRECATED Bool RimeDeployWorkspace() {
   Deployer& deployer(Service::instance().deployer());
+  deployer.ResetDeploymentResult();
   return Bool(deployer.RunTask("installation_update") &&
               deployer.RunTask("workspace_update") &&
               deployer.RunTask("cleanup_trash"));
@@ -138,6 +141,7 @@ RIME_DEPRECATED Bool RimeDeployConfigFile(const char* file_name,
 
 RIME_DEPRECATED Bool RimeSyncUserData() {
   Service::instance().CleanupAllSessions();
+  Service::instance().ReleasePrewarm();
   Deployer& deployer(Service::instance().deployer());
   const bool installation = deployer.ScheduleTask("installation_update");
   const bool configs = deployer.ScheduleTask("backup_config_files");
@@ -1100,14 +1104,10 @@ static bool LoadTypeGroup(const char* schema_id,
   return true;
 }
 
-static Bool RimeGetTypeOption(RimeSessionId session_id,
-                              const char* schema_id,
-                              const char* group,
-                              char* option,
-                              size_t buffer_size) {
-  OptionGroupConfig types;
-  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
-    return False;
+static string ResolveTypeOption(RimeSessionId session_id,
+                                const char* schema_id,
+                                const char* group,
+                                const OptionGroupConfig& types) {
   string selected;
   auto session = Service::instance().GetSession(session_id);
   if (session && session->schema() && session->context() &&
@@ -1124,11 +1124,59 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
     the<Config> user(component ? component->Create("user") : nullptr);
     selected = types.RestoreChoice(user.get(), schema_id, group);
   }
+  return selected;
+}
+
+static Bool RimeGetTypeOption(RimeSessionId session_id,
+                              const char* schema_id,
+                              const char* group,
+                              char* option,
+                              size_t buffer_size) {
+  OptionGroupConfig types;
+  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
+    return False;
+  const string selected =
+      ResolveTypeOption(session_id, schema_id, group, types);
   if (selected.size() >= buffer_size)
     return False;
   selected.copy(option, selected.size());
   option[selected.size()] = '\0';
   return True;
+}
+
+static Bool RimeGetTypeOptions(RimeSessionId session_id,
+                               const char* schema_id,
+                               const char* group,
+                               RimeTypeOption** options,
+                               size_t* count) {
+  if (!options || !count)
+    return False;
+  *options = nullptr;
+  *count = 0;
+  OptionGroupConfig types;
+  if (!LoadTypeGroup(schema_id, group, &types))
+    return False;
+  const string selected =
+      ResolveTypeOption(session_id, schema_id, group, types);
+  auto* items = new RimeTypeOption[types.options.size()]{};
+  for (size_t i = 0; i < types.options.size(); ++i) {
+    const auto& item = types.options[i];
+    items[i] = {dup_string(item.option), dup_string(item.label),
+                Bool(item.option == selected)};
+  }
+  *options = items;
+  *count = types.options.size();
+  return True;
+}
+
+static void RimeFreeTypeOptions(RimeTypeOption* options, size_t count) {
+  if (!options)
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    delete[] options[i].option;
+    delete[] options[i].label;
+  }
+  delete[] options;
 }
 
 static Bool RimeSelectTypeOption(RimeSessionId session_id,
@@ -1228,6 +1276,160 @@ RIME_DEPRECATED Bool RimeDeleteCandidateOnCurrentPage(RimeSessionId session_id,
                                                       size_t index) {
   return (Bool)do_with_candidate_on_current_page(session_id, index,
                                                  &Context::DeleteCandidate);
+}
+
+static Bool RimeSelectSwitch(RimeSessionId session_id,
+                             const char* option,
+                             Bool value) {
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !option || !session->engine() ||
+      session->engine()->active_engine() != session->engine())
+    return False;
+  return Bool(session->engine()->SelectSwitch(option, !!value));
+}
+
+static Bool RimeEditCandidate(RimeSessionId session_id,
+                              size_t index,
+                              Bool on_current_page,
+                              const char* action) {
+  if (!action)
+    return False;
+  const string name(action);
+  const bool auto_delete = name == "auto_delete";
+  auto edit = user_rank::EditAction::kResetManual;
+  if (name == "manual_up") {
+    edit = user_rank::EditAction::kMoveUp;
+  } else if (name == "manual_down") {
+    edit = user_rank::EditAction::kMoveDown;
+  } else if (name == "manual_delete") {
+    edit = user_rank::EditAction::kResetManual;
+  } else if (!auto_delete) {
+    return False;
+  }
+  auto session = Service::instance().GetSession(session_id);
+  if (!session || !session->engine() || !session->context())
+    return False;
+  auto* ctx = session->context();
+  if (!ctx->IsComposing() || !ctx->HasMenu())
+    return False;
+  auto& seg = ctx->composition().back();
+  if (on_current_page) {
+    auto* schema = session->schema();
+    if (!schema || schema->page_size() <= 0)
+      return False;
+    const size_t page_size = schema->page_size();
+    if (index >= page_size)
+      return False;
+    index += seg.selected_index / page_size * page_size;
+  }
+  if (index == size_t(-1) || !seg.GetCandidateAt(index))
+    return False;
+  if (auto_delete)
+    return Bool(ctx->DeleteCandidate(index));
+  // Use the exact validated candidate, without clamping an invalid index or
+  // emitting an intermediate selection notification before the edit.
+  seg.selected_index = index;
+  return Bool(user_rank::ApplyEditAction(session->engine(), ctx, edit));
+}
+
+static void RimeFreeStringList(RimeStringList* list) {
+  if (!list)
+    return;
+  for (size_t i = 0; i < list->size; ++i)
+    delete[] list->list[i];
+  delete[] list->list;
+  *list = {};
+}
+
+template <class Container>
+static void CopyStringList(const Container& values, RimeStringList* list) {
+  list->list = new char*[values.size()]{};
+  for (const auto& value : values) {
+    list->list[list->size] = dup_string(value);
+    ++list->size;
+  }
+}
+
+static void RimeFreeDeploymentResult(RimeDeploymentResult* result) {
+  if (!result)
+    return;
+  RimeFreeStringList(&result->schema_ids);
+  RimeFreeStringList(&result->successful_schemas);
+  RimeFreeStringList(&result->failed_schemas);
+  *result = {};
+}
+
+static Bool RimeGetDeploymentResult(RimeDeploymentResult* result) {
+  if (!result)
+    return False;
+  *result = {};
+  auto& deployer = Service::instance().deployer();
+  if (deployer.IsWorking() || deployer.IsDeployingSchemas())
+    return False;
+  try {
+    auto snapshot = deployer.LastDeploymentResult();
+    if (!snapshot)
+      return False;
+    CopyStringList(snapshot->schema_ids, &result->schema_ids);
+    CopyStringList(snapshot->successful_schemas, &result->successful_schemas);
+    CopyStringList(snapshot->failed_schemas, &result->failed_schemas);
+    result->success = Bool(snapshot->success);
+    return True;
+  } catch (...) {
+    RimeFreeDeploymentResult(result);
+    return False;
+  }
+}
+
+static Bool RimeDeploymentHasOtherFailure() {
+  try {
+    auto& deployer = Service::instance().deployer();
+    if (deployer.IsWorking() || deployer.IsDeployingSchemas())
+      return True;
+    auto snapshot = deployer.LastDeploymentResult();
+    return Bool(!snapshot || snapshot->other_task_failed);
+  } catch (...) {
+    return True;
+  }
+}
+
+static Bool RimeGetInitialSchema(char* schema_id, size_t buffer_size) {
+  if (!schema_id || !buffer_size)
+    return False;
+  schema_id[0] = '\0';
+  try {
+    const auto id = Service::instance().InitialSchemaId();
+    if (id.empty() || id.size() >= buffer_size)
+      return False;
+    id.copy(schema_id, id.size());
+    schema_id[id.size()] = '\0';
+    return True;
+  } catch (...) {
+    return False;
+  }
+}
+
+static Bool RimePrewarmSchema(const char* schema_id, RimeStringList* paths) {
+  if (!paths)
+    return False;
+  *paths = {};
+  try {
+    vector<string> files;
+    if (!Service::instance().PrewarmSchema(schema_id ? schema_id : "", &files))
+      return False;
+    CopyStringList(files, paths);
+    return True;
+  } catch (const std::exception& ex) {
+    LOG(WARNING) << "schema prewarm failed: " << ex.what();
+  } catch (...) {
+    LOG(WARNING) << "schema prewarm failed.";
+  }
+  RimeFreeStringList(paths);
+  return False;
+}
+
+static void RimeReleasePrewarm() {
+  Service::instance().ReleasePrewarm();
 }
 
 static const char* RimeGetInput(RimeSessionId session_id) {
@@ -1407,6 +1609,17 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.select_code_choice = &RimeSelectCodeChoice;
     s_api.get_type_option = &RimeGetTypeOption;
     s_api.select_type_option = &RimeSelectTypeOption;
+    s_api.get_type_options = &RimeGetTypeOptions;
+    s_api.free_type_options = &RimeFreeTypeOptions;
+    s_api.edit_candidate = &RimeEditCandidate;
+    s_api.get_deployment_result = &RimeGetDeploymentResult;
+    s_api.free_deployment_result = &RimeFreeDeploymentResult;
+    s_api.get_initial_schema = &RimeGetInitialSchema;
+    s_api.prewarm_schema = &RimePrewarmSchema;
+    s_api.free_string_list = &RimeFreeStringList;
+    s_api.release_prewarm = &RimeReleasePrewarm;
+    s_api.deployment_has_other_failure = &RimeDeploymentHasOtherFailure;
+    s_api.select_switch = &RimeSelectSwitch;
   }
   return &s_api;
 }

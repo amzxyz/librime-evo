@@ -70,6 +70,12 @@ class RIME_DLL Service {
   void CleanupStaleSessions();
   void CleanupAllSessions();
 
+  string InitialSchemaId();
+  // Called on the same owner thread as session creation. Returns actual
+  // read-only resource paths, even before the first input session exists.
+  bool PrewarmSchema(const string& schema_id, vector<string>* paths);
+  void ReleasePrewarm();
+
   void SetNotificationHandler(const NotificationHandler& handler);
   void ClearNotificationHandler();
   void Notify(SessionId session_id,
@@ -96,6 +102,10 @@ class RIME_DLL Service {
   NotificationHandler notification_handler_;
   std::mutex mutex_;
   bool started_ = false;
+  std::mutex prewarm_mutex_;
+  the<Schema> prewarm_schema_;
+  vector<an<void>> prewarm_pins_;
+  vector<string> prewarm_paths_;
 };
 
 }  // namespace rime

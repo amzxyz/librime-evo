@@ -11,6 +11,8 @@
 #include <rime/dict/dict_compiler.h>
 #include <rime/dict/dict_settings.h>
 #include <rime/dict/dictionary.h>
+#include <rime/dict/prism.h>
+#include <rime/dict/table.h>
 #include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/engine.h>
@@ -66,6 +68,7 @@ version: "1.0"
   }
 
   void TearDown() override {
+    Service::instance().ReleasePrewarm();
     std::filesystem::remove(schema_path_);
     std::remove((schema_id_ + ".custom.yaml").c_str());
     for (const char* name : {"build_dict_test", "build_dict_other",
@@ -640,6 +643,55 @@ TEST_F(RimeBuildDictionaryTest, CustomPatchesNamedAlgebraAndAddsDictionary) {
   EXPECT_EQ("号", Lookup("build_dict_other", "build_dict_other", "hao"));
 }
 
+TEST_F(RimeBuildDictionaryTest, PrewarmSharesReadOnlyDictionaryMappings) {
+  WriteSchema(kDefinitions, true);
+  Config config;
+  ASSERT_TRUE(config.LoadFromFile(schema_path_));
+  ASSERT_TRUE(config.SetString("translator/user_dict", schema_id_));
+  ASSERT_TRUE(config.SetString("translator/learning_mode", "auto"));
+  ASSERT_TRUE(config.SaveToFile(schema_path_));
+  SchemaUpdate update(schema_path_);
+  ASSERT_TRUE(update.Run(&Service::instance().deployer()));
+
+  auto api = rime_get_api();
+  RimeStringList files{};
+  EXPECT_FALSE(api->prewarm_schema("missing_prewarm_schema", &files));
+  ASSERT_TRUE(api->prewarm_schema(schema_id_.c_str(), &files));
+  set<string> names;
+  for (size_t i = 0; i < files.size; ++i) {
+    path file(files.list[i]);
+    EXPECT_TRUE(file.is_absolute());
+    names.insert(file.filename().u8string());
+  }
+  api->free_string_list(&files);
+  EXPECT_TRUE(names.count("build_dict_test.table.bin"));
+  EXPECT_TRUE(names.count("build_dict_test.pinyin.prism.bin"));
+  EXPECT_FALSE(std::filesystem::exists(path(schema_id_ + ".userdb")));
+
+  Schema schema(schema_id_);
+  auto* component = Dictionary::Require("dictionary");
+  ASSERT_TRUE(component);
+  the<Dictionary> dictionary(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_TRUE(dictionary->primary_table()->IsOpen());
+  EXPECT_TRUE(dictionary->prism()->IsOpen());
+  ASSERT_TRUE(dictionary->Load());
+  dictionary.reset();
+  // A real session may be short-lived; the idle prewarm pin survives it.
+  auto session = api->create_session();
+  ASSERT_NE(0u, session);
+  api->destroy_session(session);
+  dictionary.reset(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_TRUE(dictionary->primary_table()->IsOpen());
+  dictionary.reset();
+  api->release_prewarm();
+  dictionary.reset(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_FALSE(dictionary->primary_table()->IsOpen());
+  EXPECT_FALSE(dictionary->prism()->IsOpen());
+}
+
 TEST_F(RimeBuildDictionaryTest, RuntimeSwitchesDictionaryQualifiedPrisms) {
   WriteSchema(kDefinitions, true);
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
@@ -903,8 +955,19 @@ translator:
       << "毫\thao\t150\n";
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   auto engine = OpenEngine();
-  the<Translator> translator(Translator::Require("table_translator")
-                                 ->Create(Ticket(engine.get(), "translator")));
+  Ticket ticket(engine.get(), "translator");
+  auto* factory = Dictionary::Require("dictionary");
+  ASSERT_TRUE(factory);
+  the<Dictionary> first(factory->Create(ticket));
+  the<Dictionary> second(factory->Create(ticket));
+  ASSERT_TRUE(first && second);
+  ASSERT_TRUE(first->Load());
+  ASSERT_TRUE(second->Load());
+  ASSERT_EQ(2u, first->tables().size());
+  ASSERT_EQ(2u, second->tables().size());
+  EXPECT_EQ(first->tables()[1], second->tables()[1]);
+  the<Translator> translator(
+      Translator::Require("table_translator")->Create(ticket));
   ASSERT_TRUE(translator);
   const auto candidates = Query(translator.get(), "hk");
   EXPECT_NE(string::npos, candidates.find("好"));

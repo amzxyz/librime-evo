@@ -5,6 +5,10 @@
 // 2011-08-08 GONG Chen <chen.sst@gmail.com>
 //
 #include <rime/context.h>
+#include <rime/dict/auxiliary_db.h>
+#include <rime/dict/mapped_file.h>
+#include <rime/path_resolver.h>
+#include <rime/switcher.h>
 #include <rime/engine.h>
 #include <rime/resource.h>
 #include <rime/schema.h>
@@ -67,19 +71,83 @@ Schema* Session::schema() const {
 Service::Service() {
   deployer_.message_sink().connect(
       [this](auto type, auto value) { Notify(0, type, value); });
+  deployer_.before_deploy().connect([this](Deployer*, const vector<string>&) {
+    // No prewarm mapping may pin files that the compiler is about to replace.
+    ReleasePrewarm();
+    AuxiliaryDb::ReleaseShared();
+  });
 }
 
 Service::~Service() {
+  deployer_.JoinWorkThread();
   StopService();
 }
 
 void Service::StartService() {
+  deployer_.ResetDeploymentResult();
   started_ = true;
 }
 
 void Service::StopService() {
   started_ = false;
   CleanupAllSessions();
+  ReleasePrewarm();
+  AuxiliaryDb::ReleaseShared();
+}
+
+string Service::InitialSchemaId() {
+  if (disabled())
+    return {};
+  Schema defaults;
+  auto* component = Config::Require("user_config");
+  the<Config> user(component ? component->Create("user") : nullptr);
+  return Switcher::InitialSchemaId(defaults.config(), user.get());
+}
+
+bool Service::PrewarmSchema(const string& schema_id, vector<string>* paths) {
+  paths->clear();
+  std::lock_guard<std::mutex> lock(prewarm_mutex_);
+  if (disabled() || deployer_.IsDeployingSchemas())
+    return false;
+  const auto id = schema_id.empty() ? InitialSchemaId() : schema_id;
+  if (id.empty() || !safe_path::ValidRelativeName(id) || id.front() == '.')
+    return false;
+  if (prewarm_schema_ && prewarm_schema_->schema_id() == id) {
+    *paths = prewarm_paths_;
+    return true;
+  }
+  // A live session already owns its runtime resources. Do not create another
+  // set of mappings in the middle of input or a schema switch.
+  if (!sessions_.empty())
+    return false;
+  prewarm_pins_.clear();
+  prewarm_schema_.reset();
+  prewarm_paths_.clear();
+  the<Schema> schema(new Schema(id));
+  string compiled_id;
+  if (!schema->config() ||
+      !schema->config()->GetString("schema/schema_id", &compiled_id) ||
+      compiled_id != id)
+    return false;
+  vector<an<void>> pins;
+  vector<path> files;
+  {
+    ReadOnlyResourceCollector collector(&files);
+    Engine::PrepareSchemaResources(schema.get(), &pins);
+  }
+  for (const auto& file : files)
+    paths->push_back(file.u8string());
+  prewarm_schema_ = std::move(schema);
+  prewarm_pins_ = std::move(pins);
+  prewarm_paths_ = *paths;
+  return true;
+}
+
+void Service::ReleasePrewarm() {
+  std::lock_guard<std::mutex> lock(prewarm_mutex_);
+  prewarm_pins_.clear();
+  prewarm_schema_.reset();
+  prewarm_paths_.clear();
 }
 
 SessionId Service::CreateSession() {
@@ -91,6 +159,8 @@ SessionId Service::CreateSession() {
     session->Activate();
     id = reinterpret_cast<uintptr_t>(session.get());
     sessions_[id] = session;
+    // Keep the single prepared schema pinned across editor/session changes.
+    // Android can destroy the previous session before creating the next one.
   } catch (const std::exception& ex) {
     LOG(ERROR) << "Error creating session: " << ex.what();
   } catch (const string& ex) {

@@ -376,7 +376,7 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
     if (auxiliary_type_ == "aux_types") {
       if (auxiliary_types_.Load(config, "aux_types")) {
         for (const auto& item : auxiliary_types_.options) {
-          an<AuxiliaryDb> database = AuxiliaryDb::Open(item.name);
+          an<AuxiliaryDb> database = AuxiliaryDb::OpenShared(item.name);
           if (!database) {
             LOG(ERROR) << "cannot preload auxiliary group '" << item.name
                        << "'";
@@ -590,7 +590,7 @@ bool ScriptTranslator::LoadAuxiliaryMatcher() {
         return false;
       auxiliary_db_ = found->second;
     } else {
-      auxiliary_db_ = AuxiliaryDb::Open(selected);
+      auxiliary_db_ = AuxiliaryDb::OpenShared(selected);
       if (!auxiliary_db_)
         return false;
     }

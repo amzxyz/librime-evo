@@ -29,6 +29,9 @@ class AuxiliaryDb : public MappedFile {
   explicit AuxiliaryDb(const path& file_path);
 
   RIME_DLL static the<AuxiliaryDb> Open(const string& group);
+  // Runtime readers share immutable mappings; builders keep using Open/Load.
+  static an<AuxiliaryDb> OpenShared(const string& group);
+  static void ReleaseShared();
 
   bool Load();
   bool Build(const map<string, vector<AuxiliaryCode>>& by_character,

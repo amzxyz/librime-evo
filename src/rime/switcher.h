@@ -33,9 +33,8 @@ class Switcher : public Processor, public Engine {
 
   void SetActiveSchema(const string& schema_id);
   Schema* CreateSchema();
+  static string InitialSchemaId(Config* config, Config* user);
   void SelectNextSchema();
-  bool IsAutoSave(const string& option) const;
-  void RestoreSavedOptions();
 
   void RefreshMenu();
   void Activate();
@@ -56,7 +55,6 @@ class Switcher : public Processor, public Engine {
   the<Config> user_config_;
   string caption_;
   vector<KeyEvent> hotkeys_;
-  set<string> save_options_;
   bool fold_options_ = false;
   bool fix_schema_list_order_ = false;
 

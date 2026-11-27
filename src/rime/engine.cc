@@ -13,6 +13,11 @@
 #include <rime/config/config_types.h>
 #include <rime/engine.h>
 #include <rime/dict/prism_config.h>
+#include <rime/dict/auxiliary_db.h>
+#include <rime/dict/dictionary.h>
+#include <rime/dict/mapped_file.h>
+#include <rime/dict/rewrite_store.h>
+#include <rime/gear/grammar.h>
 #include <rime/filter.h>
 #include <rime/formatter.h>
 #include <rime/key_event.h>
@@ -103,11 +108,15 @@ class ConcreteEngine : public Engine {
   virtual void CommitText(string text);
   virtual void Compose(Context* ctx);
   void GetCodeChoices(vector<CodeChoice>* result) override;
+  bool SelectConfiguredSwitch(const string& option, bool value);
 
  protected:
   bool ProcessKey(const KeyEvent& key_event, bool synthetic);
   void InitializeComponents();
   void InitializeOptions();
+  bool IsTypeOption(const string& option) const;
+  void RefreshOptionComponents(Context* ctx);
+  void NotifyOption(Context* ctx, const string& option);
   void CalculateSegmentation(Segmentation* segments);
   void TranslateSegments(Segmentation* segments);
   void FormatText(string* text);
@@ -129,12 +138,19 @@ class ConcreteEngine : public Engine {
   an<Switcher> switcher_;
   map<string, OptionGroupConfig> type_groups_;
   bool enforcing_type_group_ = false;
+  bool applying_switch_ = false;
+  set<string> schema_switches_;
 };
 
 // implementations
 
 Engine* Engine::Create() {
   return new ConcreteEngine;
+}
+
+bool Engine::SelectSwitch(const string& option, bool value) {
+  auto* engine = dynamic_cast<ConcreteEngine*>(this);
+  return engine && engine->SelectConfiguredSwitch(option, value);
 }
 
 Engine::Engine() : schema_(new Schema), context_(new Context) {}
@@ -161,11 +177,7 @@ ConcreteEngine::ConcreteEngine() {
       });
 
   switcher_ = New<Switcher>(this);
-  // saved options should be loaded only once per input session
-  switcher_->RestoreSavedOptions();
-
   InitializeComponents();
-  InitializeOptions();
 }
 
 ConcreteEngine::~ConcreteEngine() {
@@ -208,26 +220,29 @@ void ConcreteEngine::OnContextUpdate(Context* ctx) {
   Compose(ctx);
 }
 
+void ConcreteEngine::RefreshOptionComponents(Context* ctx) {
+  UpdateComponentConditions(processors_, ctx);
+  UpdateComponentConditions(segmentors_, ctx);
+  UpdateComponentConditions(translators_, ctx);
+  UpdateComponentConditions(filters_, ctx);
+  if (ctx->IsComposing())
+    ctx->RefreshNonConfirmedComposition();
+}
+
+void ConcreteEngine::NotifyOption(Context* ctx, const string& option) {
+  const bool on = ctx->get_option(option);
+  message_sink_("option", on ? option : "!" + option);
+}
+
 void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
-  if (!ctx)
+  if (!ctx || applying_switch_)
     return;
   EnforceTypeOption(ctx, option);
   LOG(INFO) << "updated option: " << option;
-  // A radio-group change emits nested option notifications. Recompose after
-  // all members have reached their final values.
-  if (!enforcing_type_group_) {
-    UpdateComponentConditions(processors_, ctx);
-    UpdateComponentConditions(segmentors_, ctx);
-    UpdateComponentConditions(translators_, ctx);
-    UpdateComponentConditions(filters_, ctx);
-    if (ctx->IsComposing()) {
-      ctx->RefreshNonConfirmedComposition();
-    }
-  }
-  // notification
-  bool option_is_on = ctx->get_option(option);
-  string msg(option_is_on ? option : "!" + option);
-  message_sink_("option", msg);
+  // Recompose after all members of an exclusive group have settled.
+  if (!enforcing_type_group_)
+    RefreshOptionComponents(ctx);
+  NotifyOption(ctx, option);
 }
 
 void ConcreteEngine::SaveTypeChoice(const string& group, const string& option) {
@@ -489,7 +504,6 @@ void ConcreteEngine::ApplySchema(Schema* schema) {
   context_->Clear();
   context_->ClearTransientOptions();
   InitializeComponents();
-  InitializeOptions();
   switcher_->SetActiveSchema(schema_->schema_id());
   message_sink_("schema", schema_->schema_id() + "/" + schema_->schema_name());
 }
@@ -619,6 +633,124 @@ inline bool ParseComponentSpec(const an<ConfigItem>& item,
   return true;
 }
 
+void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
+  Config* config = schema ? schema->config() : nullptr;
+  if (!config)
+    return;
+  set<string> dictionaries, auxiliary, rewrites;
+  bool grammar = false;
+  // Isolate optional resource failures. Collect only mappings associated
+  // with a successfully retained object; keep actual load order.
+  auto prepare = [&](const string& label, auto loader) {
+    try {
+      vector<path> files;
+      an<void> pin;
+      {
+        ReadOnlyResourceCollector collector(&files);
+        pin = loader();
+      }
+      if (!pin)
+        return;
+      for (const auto& file : files)
+        ReadOnlyResourceCollector::Record(file);
+      pins->push_back(std::move(pin));
+    } catch (const std::exception& ex) {
+      LOG(WARNING) << "prewarm '" << label << "' failed: " << ex.what();
+    } catch (...) {
+      LOG(WARNING) << "prewarm '" << label << "' failed.";
+    }
+  };
+  auto add_rewrite = [&](const string& name_space) {
+    string data;
+    if (config->GetString(name_space + "/data", &data) && !data.empty())
+      rewrites.insert(data);
+  };
+  if (auto list = config->GetList("engine/translators")) {
+    for (const auto& item : *list) {
+      string prescription;
+      ComponentEntry<Translator> entry;
+      if (!ParseComponentSpec(item, &prescription, &entry))
+        continue;
+      Ticket ticket(nullptr, "translator", prescription);
+      ticket.schema = schema;
+      // Reverse lookup is intentionally lazy, and plugin translators may have
+      // side effects. Never construct a translator or open a UserDB here.
+      if (ticket.klass != "script_translator" &&
+          ticket.klass != "table_translator")
+        continue;
+      const auto& ns = ticket.name_space;
+      if (dictionaries.insert(ns).second) {
+        string name;
+        auto* factory = Dictionary::Require("dictionary");
+        if (factory && config->GetString(ns + "/dictionary", &name) &&
+            !name.empty()) {
+          prepare(name, [&]() -> an<void> {
+            an<Dictionary> dict(factory->Create(ticket));
+            return dict && dict->Load() ? dict : nullptr;
+          });
+        }
+      }
+      string charset;
+      if (config->GetString(ns + "/charset", &charset))
+        add_rewrite(charset);
+      if (ticket.klass == "script_translator") {
+        grammar = true;
+        string aux;
+        if (config->GetString(ns + "/aux", &aux)) {
+          if (aux == "aux_types") {
+            OptionGroupConfig types;
+            if (types.Load(config, "aux_types")) {
+              for (const auto& type : types.options)
+                auxiliary.insert(type.name);
+            }
+          } else if (!aux.empty()) {
+            auxiliary.insert(aux);
+          }
+        }
+      } else {
+        bool sentence = true, completion = false, contextual = false;
+        config->GetBool(ns + "/enable_sentence", &sentence);
+        config->GetBool(ns + "/sentence_over_completion", &completion);
+        config->GetBool(ns + "/contextual_suggestions", &contextual);
+        grammar = grammar || sentence || completion || contextual;
+      }
+    }
+  }
+  if (auto list = config->GetList("engine/filters")) {
+    for (const auto& item : *list) {
+      string prescription;
+      ComponentEntry<Filter> entry;
+      if (!ParseComponentSpec(item, &prescription, &entry))
+        continue;
+      Ticket ticket(nullptr, "filter", prescription);
+      if (ticket.klass == "rewriter") {
+        const string ns =
+            ticket.name_space == "filter" ? "rewriter" : ticket.name_space;
+        add_rewrite(ns);
+      }
+    }
+  }
+  string language;
+  if (grammar && config->GetString("grammar/language", &language) &&
+      !language.empty()) {
+    if (auto* factory = Grammar::Require("grammar")) {
+      // The grammar plugin itself resolves its model (.dlm, .gram, etc.).
+      prepare(language, [&]() -> an<void> {
+        return an<Grammar>(factory->Create(config));
+      });
+    }
+  }
+  for (const auto& name : auxiliary) {
+    prepare(name, [&]() -> an<void> { return AuxiliaryDb::OpenShared(name); });
+  }
+  for (const auto& name : rewrites) {
+    prepare(name, [&]() -> an<void> {
+      auto resource = RewriteResource::Require(name);
+      return resource && resource->Acquire() ? resource : nullptr;
+    });
+  }
+}
+
 template <typename T>
 inline void CreateComponentsFromList(
     Engine* engine,
@@ -678,6 +810,8 @@ void ConcreteEngine::InitializeComponents() {
   filters_.clear();
   formatters_.clear();
   post_processors_.clear();
+  context_->ClearSchemaOptions(schema_switches_);
+  schema_switches_.clear();
 
   if (switcher_) {
     ComponentEntry<Processor> entry;
@@ -695,6 +829,7 @@ void ConcreteEngine::InitializeComponents() {
     return;
 
   InitializeTypeGroups();
+  InitializeOptions();
 
   // Create components using inline template function
   CreateComponentsFromList<Processor>(this, config, "engine/processors",
@@ -731,29 +866,170 @@ void ConcreteEngine::InitializeComponents() {
   }
 }
 
-void ConcreteEngine::InitializeOptions() {
-  LOG(INFO) << "ConcreteEngine::InitializeOptions";
-  // reset custom switches
-  Config* config = schema_->config();
-  Switches switches(config);
-  switches.FindOption([this](Switches::SwitchOption option) {
-    for (const auto& [group, types] : type_groups_) {
-      if (types.Contains(option.option_name))
-        return Switches::kContinue;
-    }
-    LOG(INFO) << "found switch option: " << option.option_name
-              << ", reset: " << option.reset_value;
-    if (option.reset_value >= 0) {
-      if (option.type == Switches::kToggleOption) {
-        context_->set_option(option.option_name, (option.reset_value != 0));
-      } else if (option.type == Switches::kRadioGroup) {
-        context_->set_option(
-            option.option_name,
-            static_cast<int>(option.option_index) == option.reset_value);
-      }
-    }
+namespace {
+
+using SwitchOption = Switches::SwitchOption;
+
+vector<SwitchOption> GetMembers(Switches& switches, const SwitchOption& first) {
+  vector<SwitchOption> members;
+  switches.FindOption([&](SwitchOption option) {
+    if (option.switch_index == first.switch_index)
+      members.push_back(std::move(option));
     return Switches::kContinue;
   });
+  return members;
+}
+
+bool PublicSwitchName(const string& name) {
+  return !name.empty() && name.front() != '_' && name.find('/') == string::npos;
+}
+
+string SwitchPath(const string& schema, const string& option) {
+  return "var/schema_options/" + schema + "/" + option;
+}
+
+bool SaveSwitchValues(Config* user,
+                      const string& schema,
+                      const vector<SwitchOption>& members,
+                      const vector<bool>& values) {
+  if (!user)
+    return false;
+  bool changed = false;
+  for (size_t i = 0; i < members.size(); ++i) {
+    const string path = SwitchPath(schema, members[i].option_name);
+    bool old = false;
+    if (user->GetBool(path, &old) && old == values[i])
+      continue;
+    if (!user->SetBool(path, values[i]))
+      LOG(ERROR) << "cannot save switch: " << path;
+    else
+      changed = true;
+  }
+  return changed;
+}
+
+}  // namespace
+
+bool ConcreteEngine::IsTypeOption(const string& option) const {
+  for (const auto& [group, types] : type_groups_) {
+    if (types.Contains(option))
+      return true;
+  }
+  return false;
+}
+
+void ConcreteEngine::InitializeOptions() {
+  Config* config = schema_->config();
+  if (!config)
+    return;
+  auto* user = switcher_ ? switcher_->user_config() : nullptr;
+  const auto& schema_id = schema_->schema_id();
+  Switches switches(config);
+  bool changed = false;
+  switches.FindOption([&](SwitchOption first) {
+    if (first.option_index != 0)
+      return Switches::kContinue;
+    auto members = GetMembers(switches, first);
+    // Type groups have their own exclusive selection and persistence.
+    for (const auto& member : members) {
+      if (IsTypeOption(member.option_name))
+        return Switches::kContinue;
+    }
+    bool public_names = true;
+    for (const auto& member : members) {
+      public_names &= PublicSwitchName(member.option_name);
+      if (!member.option_name.empty())
+        schema_switches_.insert(member.option_name);
+    }
+    if (members.empty())
+      return Switches::kContinue;
+    const bool radio = first.type == Switches::kRadioGroup;
+    const bool remember = first.reset_value < 0 && public_names &&
+                          !schema_id.empty() &&
+                          schema_id.find('/') == string::npos;
+    vector<bool> values(members.size(), false);
+    bool has_saved_value = false;
+    if (remember && user) {
+      for (size_t i = 0; i < members.size(); ++i) {
+        bool saved = false;
+        if (user->GetBool(SwitchPath(schema_id, members[i].option_name),
+                          &saved)) {
+          values[i] = saved;
+          has_saved_value = true;
+        }
+      }
+    }
+    if (radio) {
+      size_t selected = 0;
+      if (first.reset_value >= 0) {
+        if (static_cast<size_t>(first.reset_value) < members.size())
+          selected = first.reset_value;
+      } else {
+        const auto found = std::find(values.begin(), values.end(), true);
+        if (found != values.end())
+          selected = found - values.begin();
+      }
+      for (size_t i = 0; i < members.size(); ++i)
+        values[i] = i == selected;
+    } else if (first.reset_value >= 0) {
+      values[0] = first.reset_value != 0;
+    }
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (!members[i].option_name.empty())
+        context_->set_option(members[i].option_name, values[i]);
+    }
+    // Normalize a previously saved radio group to exactly one selection.
+    if (remember && radio && has_saved_value)
+      changed |= SaveSwitchValues(user, schema_id, members, values);
+    return Switches::kContinue;
+  });
+  if (changed && user && !user->Save())
+    LOG(ERROR) << "cannot normalize saved switches";
+}
+
+bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
+  if (!schema_->config() || !PublicSwitchName(option) || IsTypeOption(option))
+    return false;
+  Switches switches(schema_->config());
+  auto selected = switches.OptionByName(option);
+  if (!selected.found())
+    return false;
+  const auto members = GetMembers(switches, selected);
+  for (const auto& member : members) {
+    if (!PublicSwitchName(member.option_name) ||
+        IsTypeOption(member.option_name))
+      return false;
+  }
+  const bool radio = selected.type == Switches::kRadioGroup;
+  // A radio selection selects one member, never deselects the whole group.
+  if (radio && !value)
+    return true;
+  vector<bool> values;
+  vector<string> changed;
+  applying_switch_ = true;
+  for (const auto& member : members) {
+    const bool selected_member = member.option_index == selected.option_index;
+    const bool next = radio ? selected_member : value;
+    values.push_back(next);
+    if (context_->get_option(member.option_name) != next) {
+      context_->set_option(member.option_name, next);
+      changed.push_back(member.option_name);
+    }
+  }
+  applying_switch_ = false;
+  if (!changed.empty()) {
+    RefreshOptionComponents(context_.get());
+    for (const auto& name : changed)
+      NotifyOption(context_.get(), name);
+  }
+  const auto& schema_id = schema_->schema_id();
+  if (selected.reset_value < 0 && switcher_ && !schema_id.empty() &&
+      schema_id.find('/') == string::npos) {
+    auto* user = switcher_->user_config();
+    if (SaveSwitchValues(user, schema_id, members, values) && !user->Save())
+      LOG(ERROR) << "cannot save switches";
+  }
+  return true;
 }
 
 }  // namespace rime

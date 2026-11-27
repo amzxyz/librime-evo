@@ -13,6 +13,31 @@
 #include <rime/dict/mapped_file.h>
 
 namespace rime {
+namespace {
+thread_local vector<path>* resource_paths = nullptr;
+}  // namespace
+
+ReadOnlyResourceCollector::ReadOnlyResourceCollector(vector<path>* paths)
+    : previous_(resource_paths) {
+  resource_paths = paths;
+}
+
+ReadOnlyResourceCollector::~ReadOnlyResourceCollector() {
+  resource_paths = previous_;
+}
+
+void ReadOnlyResourceCollector::Record(const path& file) {
+  if (!resource_paths)
+    return;
+  std::error_code ec;
+  auto absolute = std::filesystem::absolute(file, ec);
+  if (ec)
+    return;
+  path resolved(std::move(absolute));
+  if (std::find(resource_paths->begin(), resource_paths->end(), resolved) ==
+      resource_paths->end())
+    resource_paths->push_back(std::move(resolved));
+}
 
 class MappedFileImpl {
  public:
@@ -80,6 +105,7 @@ bool MappedFile::OpenReadOnly() {
   }
   file_.reset(new MappedFileImpl(file_path_, MappedFileImpl::kOpenReadOnly));
   size_ = file_->get_size();
+  ReadOnlyResourceCollector::Record(file_path_);
   return bool(file_);
 }
 

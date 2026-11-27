@@ -67,3 +67,9 @@ reenter deployment or retain references to the event data. A throwing
 before observer fails the batch; a throwing after observer is logged
 without changing the compilation result. Other observers still run.
 These notifications do not replace the frontend's deploy messages.
+
+## Frontend deployment result and warmup
+
+After joining maintenance, use `get_deployment_result` and release the returned snapshot with `free_deployment_result`. A missing/incomplete schema deployment has no snapshot. Compilation status is not runtime readiness. A frontend may report a partial failure when the initial schema is explicitly successful and other schemas explicitly failed, without other maintenance task failures (`deployment_has_other_failure`), but must not infer success from binary filenames.
+
+`get_initial_schema` follows Switcher's selection rules without creating a session. On an idle engine owner thread, `prewarm_schema(nullptr, &paths)` prepares immutable resources via the runtime factories and returns their actual mapped absolute paths for optional bounded, cancellable background page reads. Release the list with `free_string_list`. Warmup neither deploys nor opens UserDB or creates a session; it is not a runtime integrity check. Pins for a single prepared schema survive editor/session changes and are released by explicit `release_prewarm`, before schema deployment or finalize. Serialize warmup with normal session operations; no duplicate preparation is done while a session exists.

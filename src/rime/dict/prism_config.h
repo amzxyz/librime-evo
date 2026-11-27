@@ -15,6 +15,7 @@ struct PrismConfig {
   struct Selection {
     string name;
     string option;
+    string label{};
   };
 
   RIME_DLL bool Load(Config* schema, const string& name_space);

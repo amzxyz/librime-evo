@@ -4,7 +4,9 @@
 //
 
 #include <gtest/gtest.h>
+#include <fstream>
 #include <sstream>
+#include <cstdio>
 
 #include <rime/config.h>
 #include <rime/context.h>
@@ -13,6 +15,7 @@
 #include <rime/schema.h>
 #include <rime/translation.h>
 #include <rime/translator.h>
+#include <rime_api.h>
 
 namespace rime {
 namespace {
@@ -151,6 +154,67 @@ TEST(TypeGroupsTest, RemovedChoiceFallsBackToFirstOption) {
   EXPECT_EQ("pinyin", user->GetValue(path)->str());
   ASSERT_TRUE(user->SetItem(path, nullptr));
   EXPECT_TRUE(user->Save());
+}
+
+TEST(TypeGroupsTest, ApiEnumeratesDisplayReadyOptions) {
+  const string id = "type_options_api_test";
+  const string filename = id + ".schema.yaml";
+  {
+    std::ofstream file(filename);
+    file << R"YAML(schema: {schema_id: type_options_api_test}
+input_types:
+  - {option: pinyin, label: 全拼}
+  - {option: zrm, name: custom_prism}
+aux_types:
+  - {option: aux_wanxiang, label: 万象}
+  - {option: aux_zrm, label: ""}
+)YAML";
+    ASSERT_TRUE(file.good());
+  }
+  auto api = rime_get_api();
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  const string path = "var/type_groups/" + id;
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  ASSERT_TRUE(user->Save());
+  RimeTypeOption* items = nullptr;
+  size_t count = 0;
+  ASSERT_TRUE(
+      api->get_type_options(0, id.c_str(), "input_types", &items, &count));
+  ASSERT_EQ(2u, count);
+  EXPECT_STREQ("pinyin", items[0].option);
+  EXPECT_STREQ("全拼", items[0].label);
+  EXPECT_TRUE(items[0].selected);
+  EXPECT_STREQ("zrm", items[1].label);
+  EXPECT_FALSE(items[1].selected);
+  api->free_type_options(items, count);
+  ASSERT_TRUE(api->select_type_option(0, id.c_str(), "aux_types", "aux_zrm"));
+  ASSERT_TRUE(
+      api->get_type_options(0, id.c_str(), "aux_types", &items, &count));
+  ASSERT_EQ(2u, count);
+  EXPECT_STREQ("万象", items[0].label);
+  EXPECT_FALSE(items[0].selected);
+  EXPECT_STREQ("aux_zrm", items[1].label);
+  EXPECT_TRUE(items[1].selected);
+  api->free_type_options(items, count);
+  EXPECT_FALSE(api->get_type_options(0, id.c_str(), "unknown", &items, &count));
+  EXPECT_EQ(nullptr, items);
+  EXPECT_EQ(0u, count);
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  EXPECT_TRUE(user->Save());
+  std::remove(filename.c_str());
+}
+
+TEST(TypeGroupsTest, CandidateEditRejectsMissingTarget) {
+  auto api = rime_get_api();
+  EXPECT_FALSE(api->edit_candidate(0, 0, True, "manual_up"));
+  const auto session = api->create_session();
+  ASSERT_NE(0u, session);
+  EXPECT_FALSE(api->edit_candidate(session, 0, True, "auto_delete"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "manual_delete"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "manual_down"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, "unknown"));
+  EXPECT_FALSE(api->edit_candidate(session, 0, False, nullptr));
+  api->destroy_session(session);
 }
 
 TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
