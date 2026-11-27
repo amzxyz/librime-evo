@@ -1364,6 +1364,7 @@ static Bool RimeGetDeploymentResult(RimeDeploymentResult* result) {
     CopyStringList(snapshot->successful_schemas, &result->successful_schemas);
     CopyStringList(snapshot->failed_schemas, &result->failed_schemas);
     result->success = Bool(snapshot->success);
+    result->other_task_failed = Bool(snapshot->other_task_failed);
     return True;
   } catch (...) {
     RimeFreeDeploymentResult(result);

@@ -141,6 +141,8 @@ class DictionaryComponent : public Dictionary::Component {
   string ResolvePrismName(Config* config,
                           const string& dict_name,
                           const string& prism_name);
+  friend class Dictionary;
+  an<Table> GetTable(const string& resource_name);
   an<Prism> GetPrism(const string& resource_name);
 
   map<string, weak<Prism>> prism_map_;

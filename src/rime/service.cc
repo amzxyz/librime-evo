@@ -124,7 +124,10 @@ bool Service::PrewarmSchema(const string& schema_id, vector<string>* paths) {
   prewarm_schema_.reset();
   prewarm_paths_.clear();
   the<Schema> schema(new Schema(id));
-  if (!schema->config())
+  string compiled_id;
+  if (!schema->config() ||
+      !schema->config()->GetString("schema/schema_id", &compiled_id) ||
+      compiled_id != id)
     return false;
   vector<an<void>> pins;
   vector<path> files;
@@ -156,8 +159,8 @@ SessionId Service::CreateSession() {
     session->Activate();
     id = reinterpret_cast<uintptr_t>(session.get());
     sessions_[id] = session;
-    // The real session now holds shared dictionary/model mappings.
-    ReleasePrewarm();
+    // Keep the single prepared schema pinned across editor/session changes.
+    // Android can destroy the previous session before creating the next one.
   } catch (const std::exception& ex) {
     LOG(ERROR) << "Error creating session: " << ex.what();
   } catch (const string& ex) {

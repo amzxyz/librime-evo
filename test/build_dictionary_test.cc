@@ -655,6 +655,7 @@ TEST_F(RimeBuildDictionaryTest, PrewarmSharesReadOnlyDictionaryMappings) {
 
   auto api = rime_get_api();
   RimeStringList files{};
+  EXPECT_FALSE(api->prewarm_schema("missing_prewarm_schema", &files));
   ASSERT_TRUE(api->prewarm_schema(schema_id_.c_str(), &files));
   set<string> names;
   for (size_t i = 0; i < files.size; ++i) {
@@ -675,6 +676,14 @@ TEST_F(RimeBuildDictionaryTest, PrewarmSharesReadOnlyDictionaryMappings) {
   EXPECT_TRUE(dictionary->primary_table()->IsOpen());
   EXPECT_TRUE(dictionary->prism()->IsOpen());
   ASSERT_TRUE(dictionary->Load());
+  dictionary.reset();
+  // A real session may be short-lived; the idle prewarm pin survives it.
+  auto session = api->create_session();
+  ASSERT_NE(0u, session);
+  api->destroy_session(session);
+  dictionary.reset(component->Create({&schema, "translator"}));
+  ASSERT_TRUE(dictionary);
+  EXPECT_TRUE(dictionary->primary_table()->IsOpen());
   dictionary.reset();
   api->release_prewarm();
   dictionary.reset(component->Create({&schema, "translator"}));

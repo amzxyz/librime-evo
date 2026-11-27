@@ -249,6 +249,7 @@ typedef struct rime_deployment_result_t {
   RimeStringList schema_ids;
   RimeStringList successful_schemas;
   RimeStringList failed_schemas;
+  Bool other_task_failed;
 } RimeDeploymentResult;
 
 typedef struct rime_string_slice_t {

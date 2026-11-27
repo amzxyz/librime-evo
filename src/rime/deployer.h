@@ -59,6 +59,8 @@ struct DeploymentResult {
   set<string> successful_schemas;
   set<string> failed_schemas;
   bool success = false;
+  // Populated for the public snapshot after the maintenance task batch.
+  bool other_task_failed = false;
 };
 
 class Deployer : public Messenger {
@@ -128,6 +130,7 @@ class Deployer : public Messenger {
   std::atomic<bool> deploying_schemas_{false};
   std::mutex deployment_result_mutex_;
   std::optional<DeploymentResult> deployment_result_;
+  size_t deployment_result_revision_ = 0;
   std::queue<of<DeploymentTask>> pending_tasks_;
   std::mutex mutex_;
   std::future<void> work_;

@@ -815,10 +815,16 @@ bool Dictionary::Load() {
   }
   if (prism_->has_packs()) {
     if (tables_.size() < 2) {
-      the<ResourceResolver> resolver(
-          Service::instance().CreateDeployedResourceResolver(
-              {"table", "", ".table.bin"}));
-      tables_.push_back(New<Table>(resolver->ResolvePath(name_ + ".packs")));
+      auto* component =
+          dynamic_cast<DictionaryComponent*>(Dictionary::Require("dictionary"));
+      if (component) {
+        tables_.push_back(component->GetTable(name_ + ".packs"));
+      } else {
+        the<ResourceResolver> resolver(
+            Service::instance().CreateDeployedResourceResolver(
+                {"table", "", ".table.bin"}));
+        tables_.push_back(New<Table>(resolver->ResolvePath(name_ + ".packs")));
+      }
     }
     if (!tables_[1]->IsOpen() && !tables_[1]->Load()) {
       LOG(ERROR) << "missing compiled supplement for dictionary '" << name_
@@ -986,6 +992,15 @@ string DictionaryComponent::ResolvePrismName(Config* config,
   return prism_name;
 }
 
+an<Table> DictionaryComponent::GetTable(const string& resource_name) {
+  auto table = table_map_[resource_name].lock();
+  if (!table) {
+    auto file_path = table_resource_resolver_->ResolvePath(resource_name);
+    table_map_[resource_name] = table = New<Table>(file_path);
+  }
+  return table;
+}
+
 an<Prism> DictionaryComponent::GetPrism(const string& resource_name) {
   auto prism = prism_map_[resource_name].lock();
   if (!prism) {
@@ -999,17 +1014,11 @@ Dictionary* DictionaryComponent::Create(string dict_name,
                                         string prism_name,
                                         vector<string> packs) {
   // obtain prism and primary table objects
-  auto primary_table = table_map_[dict_name].lock();
-  if (!primary_table) {
-    auto file_path = table_resource_resolver_->ResolvePath(dict_name);
-    table_map_[dict_name] = primary_table = New<Table>(file_path);
-  }
+  auto primary_table = GetTable(dict_name);
   auto prism = GetPrism(prism_name);
   vector<of<Table>> tables = {std::move(primary_table)};
   if (!packs.empty()) {
-    auto file_path =
-        table_resource_resolver_->ResolvePath(dict_name + ".packs");
-    tables.push_back(New<Table>(file_path));
+    tables.push_back(GetTable(dict_name + ".packs"));
   }
   auto dictionary = new Dictionary(std::move(dict_name), std::move(packs),
                                    std::move(tables), std::move(prism));

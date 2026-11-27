@@ -114,6 +114,6 @@ auto after = deployer.after_deploy().connect(
 
 ## 前端部署结果与预热
 
-维护线程结束后，前端可调用 `get_deployment_result` 读取本轮方案部署结果，并使用 `free_deployment_result` 释放。未执行方案部署、选择阶段失败或结果尚未就绪时返回 false；方案编译成功并不等同于运行时资源完整。只有当前方案明确成功且其他方案明确失败时，前端才可将整体失败降级为部分失败提示。
+维护线程结束后，前端可调用 `get_deployment_result` 读取本轮方案部署结果，并使用 `free_deployment_result` 释放。未执行方案部署、选择阶段失败或结果尚未就绪时返回 false；方案编译成功并不等同于运行时资源完整。只有当前方案明确成功、其他方案明确失败且没有独立维护任务失败（`other_task_failed`）时，前端才可将整体失败降级为部分失败提示。
 
-`get_initial_schema` 使用 Switcher 的真实初始方案选择规则，不需要创建会话。空闲时调用 `prewarm_schema(nullptr, &paths)`，通过原生资源工厂准备该方案实际使用的只读词典、Prism、辅助码、Rewrite 和语言模型。返回的是实际映射文件的绝对路径，可交给有内存预算、可取消的后台 I/O 预读；使用 `free_string_list` 释放路径。预热是可选优化，不启动部署、不创建会话、不打开 UserDB，不承担运行时完整性认证。资源临时持有至第一个真实会话、`release_prewarm`、下次部署前或 finalize。调用预热与会话操作应在同一引擎所有者线程串行完成；活跃会话时不重复创建预热对象。
+`get_initial_schema` 使用 Switcher 的真实初始方案选择规则，不需要创建会话。空闲时调用 `prewarm_schema(nullptr, &paths)`，通过原生资源工厂准备该方案实际使用的只读词典、Prism、辅助码、Rewrite 和语言模型。返回的是实际映射文件的绝对路径，可交给有内存预算、可取消的后台 I/O 预读；使用 `free_string_list` 释放路径。预热是可选优化，不启动部署、不创建会话、不打开 UserDB，不承担运行时完整性认证。只保留一个预热方案的资源，跨输入会话复用，直至 `release_prewarm`、下次部署前或 finalize。调用预热与会话操作应在同一引擎所有者线程串行完成；活跃会话时不重复创建预热对象。

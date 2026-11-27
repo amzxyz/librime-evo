@@ -74,6 +74,7 @@ bool Deployer::RunSchemaDeployment(
   {
     std::lock_guard<std::mutex> lock(deployment_result_mutex_);
     deployment_result_ = result;
+    ++deployment_result_revision_;
   }
   return result.success;
 }
@@ -86,6 +87,7 @@ std::optional<DeploymentResult> Deployer::LastDeploymentResult() {
 void Deployer::ResetDeploymentResult() {
   std::lock_guard<std::mutex> lock(deployment_result_mutex_);
   deployment_result_.reset();
+  ++deployment_result_revision_;
 }
 
 bool Deployer::RunTask(const string& task_name, TaskInitializer arg) {
@@ -144,21 +146,44 @@ bool Deployer::Run() {
   message_sink_("deploy", "start");
   int success = 0;
   int failure = 0;
+  bool other_task_failed = false;
+  const auto initial_revision = [this] {
+    std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+    return deployment_result_revision_;
+  }();
   do {
     while (auto task = NextTask()) {
+      size_t previous_revision;
+      {
+        std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+        previous_revision = deployment_result_revision_;
+      }
+      bool ok = false;
       try {
-        if (task->Run(this))
-          ++success;
-        else
-          ++failure;
+        ok = task->Run(this);
       } catch (const std::exception& ex) {
-        ++failure;
         LOG(ERROR) << "Error deploying: " << ex.what();
+      } catch (...) {
+        LOG(ERROR) << "Error deploying.";
+      }
+      if (ok) {
+        ++success;
+      } else {
+        ++failure;
+        std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+        if (previous_revision == deployment_result_revision_ ||
+            !deployment_result_ || deployment_result_->failed_schemas.empty())
+          other_task_failed = true;
       }
       // boost::this_thread::interruption_point();
     }
     LOG(INFO) << success + failure << " tasks ran: " << success << " success, "
               << failure << " failure.";
+    {
+      std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+      if (deployment_result_ && initial_revision != deployment_result_revision_)
+        deployment_result_->other_task_failed = other_task_failed;
+    }
     message_sink_("deploy", !failure ? "success" : "failure");
     // new tasks could have been enqueued while we were sending the message.
     // before quitting, double check if there is nothing left to do.
