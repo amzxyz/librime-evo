@@ -203,7 +203,6 @@ void Switcher::SelectNextSchema() {
   command->Apply(this);
 }
 
-
 void Switcher::OnSelect(Context* ctx) {
   LOG(INFO) << "a switcher option is selected.";
   if (auto command = As<SwitcherCommand>(ctx->GetSelectedCandidate())) {
