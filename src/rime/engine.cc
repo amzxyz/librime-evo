@@ -870,7 +870,7 @@ namespace {
 
 using SwitchOption = Switches::SwitchOption;
 
-vector<SwitchOption> SwitchMembers(Switches& switches, const SwitchOption& first) {
+vector<SwitchOption> GetMembers(Switches& switches, const SwitchOption& first) {
   vector<SwitchOption> members;
   switches.FindOption([&](SwitchOption option) {
     if (option.switch_index == first.switch_index)
@@ -929,7 +929,7 @@ void ConcreteEngine::InitializeOptions() {
   switches.FindOption([&](SwitchOption first) {
     if (first.option_index != 0)
       return Switches::kContinue;
-    auto members = SwitchMembers(switches, first);
+    auto members = GetMembers(switches, first);
     // Type groups have their own exclusive selection and persistence.
     for (const auto& member : members) {
       if (IsTypeOption(member.option_name))
@@ -1005,7 +1005,7 @@ bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
   auto selected = switches.OptionByName(option);
   if (!selected.found())
     return false;
-  const auto members = SwitchMembers(switches, selected);
+  const auto members = GetMembers(switches, selected);
   for (const auto& member : members) {
     if (!PublicSwitchName(member.option_name) ||
         IsTypeOption(member.option_name))
