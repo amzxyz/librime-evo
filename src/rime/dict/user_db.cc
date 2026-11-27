@@ -5,7 +5,8 @@
 // 2011-11-02 GONG Chen <chen.sst@gmail.com>
 //
 #include <algorithm>
-#include <cstdio>
+#include <cerrno>
+#include <system_error>
 #include <memory>
 #include <cstdlib>
 #include <sstream>
@@ -339,38 +340,7 @@ bool UserDbHelper::UniformBackup(const path& snapshot_file) {
   if (!entries)
     return false;
 
-  // Query the database once. A temporary spool lets us write the record count
-  // before the rows without retaining the full UserDB in memory.
-  std::unique_ptr<std::FILE, int (*)(std::FILE*)> body(std::tmpfile(),
-                                                       &std::fclose);
-  if (!body) {
-    LOG(ERROR) << "cannot create temporary UserDB snapshot spool";
-    return false;
-  }
-  size_t expected_count = 0;
   string key, value, row;
-  while (entries->GetNextRecord(&key, &value)) {
-    if (!userdb_tsv::FormatUserEntry(key, value, &row)) {
-      LOG(ERROR) << "invalid userdb entry in snapshot " << db_->name()
-                 << " key=" << key;
-      return false;
-    }
-    if (std::fwrite(row.data(), 1, row.size(), body.get()) != row.size()) {
-      LOG(ERROR) << "failed writing temporary UserDB snapshot spool";
-      return false;
-    }
-    ++expected_count;
-  }
-  if (std::fflush(body.get()) != 0 || std::ferror(body.get()))
-    return false;
-  std::rewind(body.get());
-
-  std::ofstream out(static_cast<const std::filesystem::path&>(snapshot_file),
-                    std::ios::binary | std::ios::trunc);
-  if (!out) {
-    LOG(ERROR) << "cannot create UserDB snapshot: " << snapshot_file;
-    return false;
-  }
   // 导出真实元数据，/record_count 仅用于快照校验。
   string db_name, db_type, rime_version, user_id, format, clock_value;
   if (!db_->MetaFetch("/db_name", &db_name)) {
@@ -433,37 +403,78 @@ bool UserDbHelper::UniformBackup(const path& snapshot_file) {
     meta_rows.emplace_back("/manual_clock", "0");
   if (!db_->MetaFetch("/tick", &clock_value))
     meta_rows.emplace_back("/tick", "0");
+  // The caller publishes the pending snapshot only after a successful close.
+  // Reserve space for the canonical count and a padding comment, then stream
+  // each database record directly to the destination.
+  const auto& file = static_cast<const std::filesystem::path&>(snapshot_file);
+  errno = 0;
+  std::ofstream out(file, std::ios::binary | std::ios::trunc);
+  auto log_io_error = [&](const char* operation) {
+    const int error = errno;
+    const std::error_code code(error, std::generic_category());
+    LOG(ERROR) << "UserDB snapshot " << operation << ": " << snapshot_file
+               << " (" << code << "): " << code.message();
+  };
+  if (!out) {
+    log_io_error("open");
+    return false;
+  }
+  auto discard = [&]() {
+    if (out.is_open())
+      out.close();
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+    if (ec)
+      LOG(WARNING) << "cannot remove incomplete UserDB snapshot "
+                   << snapshot_file << ": " << ec.message();
+    return false;
+  };
+  auto fail_io = [&](const char* operation) {
+    log_io_error(operation);
+    return discard();
+  };
+
   out << "#@/value_fields\tcommits,dynamic,last_tick,position,manual_stamp\n";
   for (const auto& [meta_key, meta_value] : meta_rows)
     out << "#@" << meta_key << '\t' << meta_value << '\n';
-  out << "#@/record_count\t" << expected_count << '\n';
-  if (!out) {
-    LOG(ERROR) << "failed writing UserDB snapshot header: " << snapshot_file;
-    return false;
-  }
-  char buffer[64 * 1024];
-  size_t bytes = 0;
-  while ((bytes = std::fread(buffer, 1, sizeof(buffer), body.get())) > 0) {
-    out.write(buffer, static_cast<std::streamsize>(bytes));
-    if (!out) {
-      LOG(ERROR) << "failed writing UserDB snapshot body: " << snapshot_file;
-      return false;
+  out << "#@/record_count\t";
+  const auto count_offset = out.tellp();
+  constexpr size_t kCountWidth = std::numeric_limits<size_t>::digits10 + 1;
+  out << string(kCountWidth, '0') << "\n#\n";
+  if (!out)
+    return fail_io("write header");
+
+  size_t count = 0;
+  while (entries->GetNextRecord(&key, &value)) {
+    if (!userdb_tsv::FormatUserEntry(key, value, &row)) {
+      LOG(ERROR) << "invalid userdb entry in snapshot " << db_->name()
+                 << " key=" << key;
+      return discard();
     }
+    out.write(row.data(), static_cast<std::streamsize>(row.size()));
+    if (!out)
+      return fail_io("write body");
+    ++count;
   }
-  if (std::ferror(body.get())) {
-    LOG(ERROR) << "failed reading temporary UserDB snapshot spool";
-    return false;
-  }
+  // Keep the count canonical (no leading zeros). The comment absorbs the
+  // unused bytes, preserving the body offset and existing TSV readers.
+  const string count_text = std::to_string(count);
+  errno = 0;
+  out.seekp(count_offset);
+  if (!out)
+    return fail_io("seek record count");
+  out << count_text << "\n#" << string(kCountWidth - count_text.size(), '-')
+      << '\n';
+  if (!out)
+    return fail_io("write record count");
+  errno = 0;
   out.flush();
-  if (!out) {
-    LOG(ERROR) << "failed flushing UserDB snapshot: " << snapshot_file;
-    return false;
-  }
+  if (!out)
+    return fail_io("flush");
+  errno = 0;
   out.close();
-  if (!out) {
-    LOG(ERROR) << "failed closing UserDB snapshot: " << snapshot_file;
-    return false;
-  }
+  if (!out)
+    return fail_io("close");
   return true;
 }
 

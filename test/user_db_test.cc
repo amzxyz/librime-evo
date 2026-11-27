@@ -415,6 +415,37 @@ TEST(RimeUserDbStateTest, CanonicalSnapshotOnly) {
   std::remove("zc.tsv");
 }
 
+TEST(RimeUserDbTest, StreamsSnapshotAndRemovesFailedOutput) {
+  using RankDb = UserDbWrapper<LevelDb>;
+  const path file("stream_snapshot.userdb");
+  const path snapshot("stream_snapshot.userdb.tsv");
+  RankDb db(file, "stream_snapshot");
+  if (db.Exists())
+    ASSERT_TRUE(db.Remove());
+  ASSERT_TRUE(db.Open());
+  ASSERT_TRUE(db.MetaUpdate("/user_id", "test-device"));
+  size_t count = 0;
+  ASSERT_TRUE(db.Backup(snapshot));
+  EXPECT_TRUE(userdb_tsv::ValidateSnapshot(snapshot, &count));
+  EXPECT_EQ(0u, count);
+  for (int i = 0; i < 12; ++i) {
+    ASSERT_TRUE(db.Update("ce shi \tword" + std::to_string(i), "1,0,0,0,0"));
+  }
+  ASSERT_TRUE(db.Backup(snapshot));
+  EXPECT_TRUE(userdb_tsv::ValidateSnapshot(snapshot, &count));
+  EXPECT_EQ(12u, count);
+
+  const path pending("stream_snapshot.pending.userdb.tsv");
+  ASSERT_TRUE(db.Update("zz_invalid", "invalid"));
+  EXPECT_FALSE(db.Backup(pending));
+  EXPECT_FALSE(std::filesystem::exists(pending));
+  EXPECT_TRUE(userdb_tsv::ValidateSnapshot(snapshot, &count));
+  EXPECT_EQ(12u, count);
+  ASSERT_TRUE(db.Close());
+  ASSERT_TRUE(db.Remove());
+  std::filesystem::remove(snapshot);
+}
+
 TEST(RimeUserDbStateTest, MergeDatabaseClockUsesMaximum) {
   const path test_file("user_db_clock_test.txt");
   TestDb db(test_file, "user_db_clock_test");
