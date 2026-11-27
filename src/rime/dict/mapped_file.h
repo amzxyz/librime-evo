@@ -79,6 +79,21 @@ struct List {
 
 // MappedFile class definition
 
+// Opt-in, thread-local recording of actual read-only resource mappings.
+// No collection or filesystem work on normal opens outside the scope.
+class ReadOnlyResourceCollector {
+ public:
+  explicit ReadOnlyResourceCollector(set<path>* paths);
+  ~ReadOnlyResourceCollector();
+  ReadOnlyResourceCollector(const ReadOnlyResourceCollector&) = delete;
+  ReadOnlyResourceCollector& operator=(const ReadOnlyResourceCollector&) =
+      delete;
+  static void Record(const path& file);
+
+ private:
+  set<path>* previous_;
+};
+
 class MappedFileImpl;
 
 class RIME_DLL MappedFile {

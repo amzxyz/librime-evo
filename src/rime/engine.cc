@@ -13,6 +13,10 @@
 #include <rime/config/config_types.h>
 #include <rime/engine.h>
 #include <rime/dict/prism_config.h>
+#include <rime/dict/auxiliary_db.h>
+#include <rime/dict/dictionary.h>
+#include <rime/dict/rewrite_store.h>
+#include <rime/gear/grammar.h>
 #include <rime/filter.h>
 #include <rime/formatter.h>
 #include <rime/key_event.h>
@@ -617,6 +621,101 @@ inline bool ParseComponentSpec(const an<ConfigItem>& item,
     return false;
   entry->has_condition = true;
   return true;
+}
+
+void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
+  Config* config = schema ? schema->config() : nullptr;
+  if (!config)
+    return;
+  set<string> dictionaries, auxiliary, rewrites;
+  bool grammar = false;
+  auto add_rewrite = [&](const string& name_space) {
+    string data;
+    if (config->GetString(name_space + "/data", &data) && !data.empty())
+      rewrites.insert(data);
+  };
+  if (auto list = config->GetList("engine/translators")) {
+    for (const auto& item : *list) {
+      string prescription;
+      ComponentEntry<Translator> entry;
+      if (!ParseComponentSpec(item, &prescription, &entry))
+        continue;
+      Ticket ticket(nullptr, "translator", prescription);
+      ticket.schema = schema;
+      // Reverse lookup is intentionally lazy, and plugin translators may have
+      // side effects. Never construct a translator or open a UserDB here.
+      if (ticket.klass != "script_translator" &&
+          ticket.klass != "table_translator")
+        continue;
+      const auto& ns = ticket.name_space;
+      if (dictionaries.insert(ns).second) {
+        string name;
+        auto* factory = Dictionary::Require("dictionary");
+        if (factory && config->GetString(ns + "/dictionary", &name) &&
+            !name.empty()) {
+          an<Dictionary> dict(factory->Create(ticket));
+          if (dict && dict->Load())
+            pins->push_back(std::move(dict));
+        }
+      }
+      string charset;
+      if (config->GetString(ns + "/charset", &charset))
+        add_rewrite(charset);
+      if (ticket.klass == "script_translator") {
+        grammar = true;
+        string aux;
+        if (config->GetString(ns + "/aux", &aux)) {
+          if (aux == "aux_types") {
+            OptionGroupConfig types;
+            if (types.Load(config, "aux_types")) {
+              for (const auto& type : types.options)
+                auxiliary.insert(type.name);
+            }
+          } else if (!aux.empty()) {
+            auxiliary.insert(aux);
+          }
+        }
+      } else {
+        bool sentence = false, completion = false, contextual = false;
+        config->GetBool(ns + "/enable_sentence", &sentence);
+        config->GetBool(ns + "/sentence_over_completion", &completion);
+        config->GetBool(ns + "/contextual_suggestions", &contextual);
+        grammar = grammar || sentence || completion || contextual;
+      }
+    }
+  }
+  if (auto list = config->GetList("engine/filters")) {
+    for (const auto& item : *list) {
+      string prescription;
+      ComponentEntry<Filter> entry;
+      if (!ParseComponentSpec(item, &prescription, &entry))
+        continue;
+      Ticket ticket(nullptr, "filter", prescription);
+      if (ticket.klass == "rewriter") {
+        add_rewrite(ticket.name_space == "filter" ? "rewriter"
+                                                   : ticket.name_space);
+      }
+    }
+  }
+  for (const auto& name : auxiliary) {
+    if (auto db = AuxiliaryDb::OpenShared(name))
+      pins->push_back(std::move(db));
+  }
+  for (const auto& name : rewrites) {
+    auto resource = RewriteResource::Require(name);
+    if (resource && resource->Acquire())
+      pins->push_back(std::move(resource));
+  }
+  string language;
+  if (grammar && config->GetString("grammar/language", &language) &&
+      !language.empty()) {
+    if (auto* factory = Grammar::Require("grammar")) {
+      // The grammar plugin itself resolves its model (.dlm, .gram, etc.).
+      an<Grammar> model(factory->Create(config));
+      if (model)
+        pins->push_back(std::move(model));
+    }
+  }
 }
 
 template <typename T>

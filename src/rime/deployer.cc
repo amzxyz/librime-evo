@@ -36,6 +36,7 @@ bool Deployer::RunSchemaDeployment(
     std::atomic<bool>& running;
     ~Reset() { running = false; }
   } reset{deploying_schemas_};
+  ResetDeploymentResult();
   DeploymentResult result;
   try {
     if (!select(&result.schema_ids)) {
@@ -70,7 +71,21 @@ bool Deployer::RunSchemaDeployment(
   }
   result.success = result.success && result.failed_schemas.empty();
   after_deploy_(this, result);
+  {
+    std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+    deployment_result_ = result;
+  }
   return result.success;
+}
+
+std::optional<DeploymentResult> Deployer::LastDeploymentResult() {
+  std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+  return deployment_result_;
+}
+
+void Deployer::ResetDeploymentResult() {
+  std::lock_guard<std::mutex> lock(deployment_result_mutex_);
+  deployment_result_.reset();
 }
 
 bool Deployer::RunTask(const string& task_name, TaskInitializer arg) {

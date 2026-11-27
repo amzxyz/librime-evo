@@ -11,6 +11,7 @@
 #include <exception>
 #include <future>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <any>
 #include <rime/common.h>
@@ -80,6 +81,11 @@ class Deployer : public Messenger {
       const function<bool(vector<string>*)>& select,
       const function<bool(DeploymentResult*)>& work);
 
+  // Snapshot of the latest schema deployment, not a runtime load result.
+  RIME_DLL std::optional<DeploymentResult> LastDeploymentResult();
+  void ResetDeploymentResult();
+  bool IsDeployingSchemas() const { return deploying_schemas_.load(); }
+
   // read-only access after library initialization {
   path shared_data_dir;
   path user_data_dir;
@@ -120,6 +126,8 @@ class Deployer : public Messenger {
   BeforeDeployNotifier before_deploy_;
   AfterDeployNotifier after_deploy_;
   std::atomic<bool> deploying_schemas_{false};
+  std::mutex deployment_result_mutex_;
+  std::optional<DeploymentResult> deployment_result_;
   std::queue<of<DeploymentTask>> pending_tasks_;
   std::mutex mutex_;
   std::future<void> work_;

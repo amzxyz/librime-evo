@@ -3,6 +3,7 @@
 // Distributed under the BSD License
 //
 #include <rime/dict/rewrite_store.h>
+#include <rime/dict/mapped_file.h>
 #include "rewrite_internal.h"
 
 #include <algorithm>
@@ -127,6 +128,7 @@ an<const RewriteStore> RewriteStore::Open(const path& file_path) {
   }
   static std::atomic<uint64_t> generation{0};
   store->generation_ = ++generation;
+  ReadOnlyResourceCollector::Record(file_path);
   return store;
 }
 

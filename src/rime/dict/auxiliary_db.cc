@@ -5,6 +5,7 @@
 #include <cstring>
 #include <sstream>
 #include <rime/dict/auxiliary_db.h>
+#include <mutex>
 #include <rime/resource.h>
 #include <rime/service.h>
 
@@ -97,6 +98,47 @@ struct AuxiliaryDb::Metadata {
 };
 
 AuxiliaryDb::AuxiliaryDb(const path& file_path) : MappedFile(file_path) {}
+
+namespace {
+struct AuxiliaryPool {
+  std::mutex mutex;
+  map<path, weak<AuxiliaryDb>> databases;
+};
+
+AuxiliaryPool& SharedAuxiliaryPool() {
+  static AuxiliaryPool pool;
+  return pool;
+}
+}  // namespace
+
+an<AuxiliaryDb> AuxiliaryDb::OpenShared(const string& group) {
+  if (group.empty())
+    return nullptr;
+  the<ResourceResolver> resolver(
+      Service::instance().CreateDeployedResourceResolver(
+          {"auxiliary_db", "", ".aux.bin"}));
+  const auto file = resolver->ResolvePath(group);
+  auto& pool = SharedAuxiliaryPool();
+  std::lock_guard<std::mutex> lock(pool.mutex);
+  auto& entry = pool.databases[file];
+  auto db = entry.lock();
+  if (!db) {
+    db = New<AuxiliaryDb>(file);
+    if (!db->Load()) {
+      pool.databases.erase(file);
+      return nullptr;
+    }
+    entry = db;
+  }
+  ReadOnlyResourceCollector::Record(file);
+  return db;
+}
+
+void AuxiliaryDb::ReleaseShared() {
+  auto& pool = SharedAuxiliaryPool();
+  std::lock_guard<std::mutex> lock(pool.mutex);
+  pool.databases.clear();
+}
 
 the<AuxiliaryDb> AuxiliaryDb::Open(const string& group) {
   if (group.empty())

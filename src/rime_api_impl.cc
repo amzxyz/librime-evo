@@ -69,6 +69,7 @@ RIME_DEPRECATED void RimeFinalize() {
 RIME_DEPRECATED Bool RimeStartMaintenance(Bool full_check) {
   LoadModules(kDeployerModules);
   Deployer& deployer(Service::instance().deployer());
+  deployer.ResetDeploymentResult();
   deployer.RunTask("clean_old_log_files");
   if (!deployer.RunTask("installation_update")) {
     return False;
@@ -1319,6 +1320,94 @@ static Bool RimeEditCandidate(RimeSessionId session_id,
   return Bool(user_rank::ApplyEditAction(session->engine(), ctx, edit));
 }
 
+static void RimeFreeStringList(RimeStringList* list) {
+  if (!list)
+    return;
+  for (size_t i = 0; i < list->size; ++i)
+    delete[] list->list[i];
+  delete[] list->list;
+  *list = {};
+}
+
+template <class Container>
+static void CopyStringList(const Container& values, RimeStringList* list) {
+  list->list = new char*[values.size()]{};
+  for (const auto& value : values) {
+    list->list[list->size] = dup_string(value);
+    ++list->size;
+  }
+}
+
+static void RimeFreeDeploymentResult(RimeDeploymentResult* result) {
+  if (!result)
+    return;
+  RimeFreeStringList(&result->schema_ids);
+  RimeFreeStringList(&result->successful_schemas);
+  RimeFreeStringList(&result->failed_schemas);
+  *result = {};
+}
+
+static Bool RimeGetDeploymentResult(RimeDeploymentResult* result) {
+  if (!result)
+    return False;
+  *result = {};
+  auto& deployer = Service::instance().deployer();
+  if (deployer.IsWorking() || deployer.IsDeployingSchemas())
+    return False;
+  try {
+    auto snapshot = deployer.LastDeploymentResult();
+    if (!snapshot)
+      return False;
+    CopyStringList(snapshot->schema_ids, &result->schema_ids);
+    CopyStringList(snapshot->successful_schemas, &result->successful_schemas);
+    CopyStringList(snapshot->failed_schemas, &result->failed_schemas);
+    result->success = Bool(snapshot->success);
+    return True;
+  } catch (...) {
+    RimeFreeDeploymentResult(result);
+    return False;
+  }
+}
+
+static Bool RimeGetInitialSchema(char* schema_id, size_t buffer_size) {
+  if (!schema_id || !buffer_size)
+    return False;
+  schema_id[0] = '\0';
+  try {
+    const auto id = Service::instance().InitialSchemaId();
+    if (id.empty() || id.size() >= buffer_size)
+      return False;
+    id.copy(schema_id, id.size());
+    schema_id[id.size()] = '\0';
+    return True;
+  } catch (...) {
+    return False;
+  }
+}
+
+static Bool RimePrewarmSchema(const char* schema_id, RimeStringList* paths) {
+  if (!paths)
+    return False;
+  *paths = {};
+  try {
+    vector<string> files;
+    if (!Service::instance().PrewarmSchema(schema_id ? schema_id : "", &files))
+      return False;
+    CopyStringList(files, paths);
+    return True;
+  } catch (const std::exception& ex) {
+    LOG(WARNING) << "schema prewarm failed: " << ex.what();
+  } catch (...) {
+    LOG(WARNING) << "schema prewarm failed.";
+  }
+  RimeFreeStringList(paths);
+  return False;
+}
+
+static void RimeReleasePrewarm() {
+  Service::instance().ReleasePrewarm();
+}
+
 static const char* RimeGetInput(RimeSessionId session_id) {
   an<Session> session(Service::instance().GetSession(session_id));
   if (!session)
@@ -1499,6 +1588,12 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.get_type_options = &RimeGetTypeOptions;
     s_api.free_type_options = &RimeFreeTypeOptions;
     s_api.edit_candidate = &RimeEditCandidate;
+    s_api.get_deployment_result = &RimeGetDeploymentResult;
+    s_api.free_deployment_result = &RimeFreeDeploymentResult;
+    s_api.get_initial_schema = &RimeGetInitialSchema;
+    s_api.prewarm_schema = &RimePrewarmSchema;
+    s_api.free_string_list = &RimeFreeStringList;
+    s_api.release_prewarm = &RimeReleasePrewarm;
   }
   return &s_api;
 }

@@ -177,6 +177,7 @@ typedef struct rime_candidate_preview_t {
 #define RIME_EVO_TYPE_GROUPS 1
 #define RIME_EVO_TYPE_OPTIONS 1
 #define RIME_CANDIDATE_EDIT_ACTIONS 1
+#define RIME_SCHEMA_PREWARM 1
 
 typedef struct rime_code_choice_t {
   size_t start;  // byte offset in raw input
@@ -237,6 +238,18 @@ typedef struct rime_schema_list_t {
   size_t size;
   RimeSchemaListItem* list;
 } RimeSchemaList;
+
+typedef struct rime_string_list_t {
+  size_t size;
+  char** list;
+} RimeStringList;
+
+typedef struct rime_deployment_result_t {
+  Bool success;
+  RimeStringList schema_ids;
+  RimeStringList successful_schemas;
+  RimeStringList failed_schemas;
+} RimeDeploymentResult;
 
 typedef struct rime_string_slice_t {
   const char* str;
@@ -573,6 +586,18 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                          size_t index,
                          Bool on_current_page,
                          const char* action);
+  //! Latest completed schema deployment in this initialization; false when
+  //! no result exists. This reports compilation, not runtime readiness.
+  Bool (*get_deployment_result)(RimeDeploymentResult* result);
+  void (*free_deployment_result)(RimeDeploymentResult* result);
+  //! Schema that the next session will initially select.
+  Bool (*get_initial_schema)(char* schema_id, size_t buffer_size);
+  //! Prepare read-only resources before creating a session. Returned paths
+  //! are actual mapped files; a frontend may warm their pages asynchronously.
+  //! Null/empty schema_id selects the initial schema. No UserDB is opened.
+  Bool (*prewarm_schema)(const char* schema_id, RimeStringList* paths);
+  void (*free_string_list)(RimeStringList* list);
+  void (*release_prewarm)(void);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

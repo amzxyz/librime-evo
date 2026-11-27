@@ -33,6 +33,7 @@ class Switcher : public Processor, public Engine {
 
   void SetActiveSchema(const string& schema_id);
   Schema* CreateSchema();
+  static string InitialSchemaId(Config* config, Config* user);
   void SelectNextSchema();
   bool IsAutoSave(const string& option) const;
   void RestoreSavedOptions();
