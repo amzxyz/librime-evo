@@ -673,9 +673,10 @@ TEST(RimeDeploymentLifecycleTest, PublicResultRetainsPartialSchemaStatus) {
   EXPECT_STREQ("good", result.successful_schemas.list[0]);
   EXPECT_STREQ("bad", result.failed_schemas.list[0]);
   api->free_deployment_result(&result);
-  EXPECT_FALSE(deployer.RunSchemaDeployment(
+  const bool selected = deployer.RunSchemaDeployment(
       [](vector<string>*) { return false; },
-      [](DeploymentResult*) { return true; }));
+      [](DeploymentResult*) { return true; });
+  EXPECT_FALSE(selected);
   EXPECT_FALSE(api->get_deployment_result(&result));
   EXPECT_EQ(0u, result.schema_ids.size);
 }
