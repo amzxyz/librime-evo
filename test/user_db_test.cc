@@ -420,8 +420,9 @@ TEST(RimeUserDbTest, StreamsSnapshotAndRemovesFailedOutput) {
   const path file("stream_snapshot.userdb");
   const path snapshot("stream_snapshot.userdb.tsv");
   RankDb db(file, "stream_snapshot");
-  if (db.Exists())
+  if (db.Exists()) {
     ASSERT_TRUE(db.Remove());
+  }
   ASSERT_TRUE(db.Open());
   ASSERT_TRUE(db.MetaUpdate("/user_id", "test-device"));
   size_t count = 0;
