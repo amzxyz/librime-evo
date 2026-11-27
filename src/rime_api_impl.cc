@@ -1100,14 +1100,10 @@ static bool LoadTypeGroup(const char* schema_id,
   return true;
 }
 
-static Bool RimeGetTypeOption(RimeSessionId session_id,
-                              const char* schema_id,
-                              const char* group,
-                              char* option,
-                              size_t buffer_size) {
-  OptionGroupConfig types;
-  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
-    return False;
+static string ResolveTypeOption(RimeSessionId session_id,
+                                const char* schema_id,
+                                const char* group,
+                                const OptionGroupConfig& types) {
   string selected;
   auto session = Service::instance().GetSession(session_id);
   if (session && session->schema() && session->context() &&
@@ -1124,11 +1120,57 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
     the<Config> user(component ? component->Create("user") : nullptr);
     selected = types.RestoreChoice(user.get(), schema_id, group);
   }
+  return selected;
+}
+
+static Bool RimeGetTypeOption(RimeSessionId session_id,
+                              const char* schema_id,
+                              const char* group,
+                              char* option,
+                              size_t buffer_size) {
+  OptionGroupConfig types;
+  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
+    return False;
+  const string selected = ResolveTypeOption(session_id, schema_id, group, types);
   if (selected.size() >= buffer_size)
     return False;
   selected.copy(option, selected.size());
   option[selected.size()] = '\0';
   return True;
+}
+
+static Bool RimeGetTypeOptions(RimeSessionId session_id,
+                               const char* schema_id,
+                               const char* group,
+                               RimeTypeOption** options,
+                               size_t* count) {
+  if (!options || !count)
+    return False;
+  *options = nullptr;
+  *count = 0;
+  OptionGroupConfig types;
+  if (!LoadTypeGroup(schema_id, group, &types))
+    return False;
+  const string selected = ResolveTypeOption(session_id, schema_id, group, types);
+  auto* items = new RimeTypeOption[types.options.size()]{};
+  for (size_t i = 0; i < types.options.size(); ++i) {
+    const auto& item = types.options[i];
+    items[i] = {dup_string(item.option), dup_string(item.label),
+                Bool(item.option == selected)};
+  }
+  *options = items;
+  *count = types.options.size();
+  return True;
+}
+
+static void RimeFreeTypeOptions(RimeTypeOption* options, size_t count) {
+  if (!options)
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    delete[] options[i].option;
+    delete[] options[i].label;
+  }
+  delete[] options;
 }
 
 static Bool RimeSelectTypeOption(RimeSessionId session_id,
@@ -1407,6 +1449,8 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.select_code_choice = &RimeSelectCodeChoice;
     s_api.get_type_option = &RimeGetTypeOption;
     s_api.select_type_option = &RimeSelectTypeOption;
+    s_api.get_type_options = &RimeGetTypeOptions;
+    s_api.free_type_options = &RimeFreeTypeOptions;
   }
   return &s_api;
 }

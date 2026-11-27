@@ -175,6 +175,7 @@ typedef struct rime_candidate_preview_t {
 
 #define RIME_EVO_CODE_CHOICES 1
 #define RIME_EVO_TYPE_GROUPS 1
+#define RIME_EVO_TYPE_OPTIONS 1
 
 typedef struct rime_code_choice_t {
   size_t start;  // byte offset in raw input
@@ -182,6 +183,13 @@ typedef struct rime_code_choice_t {
   char* label;
   char* replacement;
 } RimeCodeChoice;
+
+//! A display-ready entry in a schema's exclusive type group.
+typedef struct rime_type_option_t {
+  char* option;
+  char* label;
+  Bool selected;
+} RimeTypeOption;
 
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
@@ -549,6 +557,14 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                              const char* schema_id,
                              const char* group,
                              const char* option);
+  //! Enumerate options in schema order, including the effective selection.
+  //! On success, release the returned array with free_type_options.
+  Bool (*get_type_options)(RimeSessionId session_id,
+                            const char* schema_id,
+                            const char* group,
+                            RimeTypeOption** options,
+                            size_t* count);
+  void (*free_type_options)(RimeTypeOption* options, size_t count);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry
