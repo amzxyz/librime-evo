@@ -173,17 +173,18 @@ translator:
   }
 
   static constexpr const char* kDefinitions = R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra:
-        pinyin: []
-        zrm:
-          - xform/^hao$/hk/
-    build_dict_other:
-      algebra:
-        pinyin: []
-        zrm:
-          - xform/^hao$/hx/
+  $build_dict_test:
+    type: dictionary
+    prism:
+      $pinyin: []
+      $zrm:
+        - xform/^hao$/hk/
+  $build_dict_other:
+    type: dictionary
+    prism:
+      $pinyin: []
+      $zrm:
+        - xform/^hao$/hx/
 )YAML";
 
   string schema_id_;
@@ -607,12 +608,12 @@ TEST_F(RimeBuildDictionaryTest,
     - xform/^hao$/hk/
 )YAML";
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra:
-        zrm:
-          __patch:
-            - build_dict_rules:/natural
+  $build_dict_test:
+    type: dictionary
+    prism:
+      $zrm:
+        __patch:
+          - build_dict_rules:/natural
 )YAML");
   SchemaUpdate update(schema_path_);
   ASSERT_TRUE(update.Run(&Service::instance().deployer()));
@@ -625,16 +626,17 @@ TEST_F(RimeBuildDictionaryTest, CustomPatchesNamedAlgebraAndAddsDictionary) {
     - xform/^hao$/hk/
 )YAML";
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra:
-        zrm: []
+  $build_dict_test:
+    type: dictionary
+    prism:
+      $zrm: []
 )YAML");
   std::ofstream(schema_id_ + ".custom.yaml") << R"YAML(patch:
-  build/dictionaries/build_dict_test/algebra/zrm:
+  build/$build_dict_test/prism/$zrm:
     __patch:
       - build_dict_rules:/natural
-  build/dictionaries/build_dict_other: {}
+  build/$build_dict_other:
+    type: dictionary
 )YAML";
   SchemaUpdate update(schema_path_);
   ASSERT_TRUE(update.Run(&Service::instance().deployer()));
@@ -750,7 +752,7 @@ TEST_F(RimeBuildDictionaryTest, RebuildsOnlyTheChangedPrism) {
       std::filesystem::last_write_time("build_dict_test.pinyin.prism.bin");
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(schema_path_));
-  auto rules = schema.GetList("build/dictionaries/build_dict_test/algebra/zrm");
+  auto rules = schema.GetList("build/$build_dict_test/prism/$zrm");
   ASSERT_TRUE(rules);
   ASSERT_TRUE(rules->Append(New<ConfigValue>("derive/^hk$/hkx/")));
   ASSERT_TRUE(schema.SaveToFile(schema_path_));
@@ -764,10 +766,11 @@ TEST_F(RimeBuildDictionaryTest, RebuildsOnlyTheChangedPrism) {
 
 TEST_F(RimeBuildDictionaryTest, FlatAndMissingAlgebraUseDictionaryPrismName) {
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra: [xform/^hao$/hk/]
-    build_dict_other: {}
+  $build_dict_test:
+    type: dictionary
+    prism: [xform/^hao$/hk/]
+  $build_dict_other:
+    type: dictionary
 )YAML");
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   EXPECT_EQ("好", Lookup("build_dict_test", "build_dict_test", "hk"));
@@ -798,10 +801,11 @@ TEST_F(RimeBuildDictionaryTest, DefaultsToFirstGroupInsteadOfUnqualifiedPrism) {
 TEST_F(RimeBuildDictionaryTest,
        UngroupedDefaultsAndExternalDictionaryStayUsable) {
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra: [xform/^hao$/hk/]
-    build_dict_other: {}
+  $build_dict_test:
+    type: dictionary
+    prism: [xform/^hao$/hk/]
+  $build_dict_other:
+    type: dictionary
 )YAML");
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   Schema schema("build_lookup", new Config);
@@ -818,18 +822,16 @@ TEST_F(RimeBuildDictionaryTest,
 
 TEST_F(RimeBuildDictionaryTest, RejectsDuplicateTargetsAndMalformedAlgebra) {
   for (const char* invalid :
-       {"build:\n  dictionaries: [build_dict_test]\n",
-        "build:\n  dictionaries:\n    build_dict_test: invalid\n",
-        "build:\n  dictionaries:\n    build_dict_test:\n"
-        "      algebra: {zrm: invalid}\n",
-        "build:\n  dictionaries:\n    build_dict_test:\n"
-        "      algebra: {zrm: []}\n"
-        "    build_dict_test.zrm: {}\n",
-        "build:\n  dictionaries:\n    build_dict_test:\n"
-        "      packs: [build_dict_test]\n",
-        "build:\n  dictionaries:\n    build_dict_test:\n"
-        "      packs: [build_dict_other]\n"
-        "    build_dict_test.packs: {}\n"}) {
+       {"build:\n  $build_dict_test: invalid\n",
+        "build:\n  $build_dict_test:\n    type: dictionary\n"
+        "    prism: {$zrm: invalid}\n",
+        "build:\n  $build_dict_test:\n    type: dictionary\n"
+        "    prism: {$zrm: []}\n"
+        "  $build_dict_test.zrm: {type: dictionary}\n",
+        "build:\n  $build_dict_test:\n    type: dictionary\n"
+        "    packs: [build_dict_test]\n",
+        "build:\n  $build_dict_test:\n    type: dictionary\n"
+        "    packs: [build_dict_other, build_dict_other]\n"}) {
     SCOPED_TRACE(invalid);
     WriteSchema(invalid);
     EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
@@ -934,11 +936,11 @@ TEST_F(RimeBuildDictionaryTest, PacksSourcesShareOneIndependentTable) {
                                                  : "豪\thao\t200\n");
   }
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      packs: [build_dict_pack_a, build_dict_pack_b]
-      algebra:
-        zrm: [xform/^hao$/hk/]
+  $build_dict_test:
+    type: dictionary
+    packs: [build_dict_pack_a, build_dict_pack_b]
+    prism:
+      $zrm: [xform/^hao$/hk/]
 translator:
   dictionary: build_dict_test
   prism: zrm
@@ -1198,12 +1200,12 @@ TEST_F(RimeBuildDictionaryTest,
 
 TEST_F(RimeBuildDictionaryTest, AlgebraGroupNamesAreNotPrismReferences) {
   WriteSchema(R"YAML(build:
-  dictionaries:
-    build_dict_test:
-      algebra:
-        dictionary: []
-        prism: [xform/^hao$/hk/]
-        prisms: []
+  $build_dict_test:
+    type: dictionary
+    prism:
+      $dictionary: []
+      $prism: [xform/^hao$/hk/]
+      $prisms: []
 )YAML");
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   EXPECT_EQ("好", Lookup("build_dict_test", "prism", "hk"));
@@ -1259,11 +1261,16 @@ TEST_F(RimeBuildDictionaryTest, TableUserEntriesWorkWithoutStaticDictionary) {
 }
 
 TEST_F(RimeBuildDictionaryTest, BuildAllPrismsIndependentlyOfTypeOptions) {
-  WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  - {option: pinyin}
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
 lookup:
   dictionary: build_dict_test
-  prisms: input_types
+  prism: ${input_types}
   tag: abc
   user_dict_mode: off
   enable_completion: false
@@ -1285,12 +1292,17 @@ lookup:
 }
 
 TEST_F(RimeBuildDictionaryTest, SharedInputTypesSwitchAllTranslators) {
-  WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  - {id: compact, name: zrm}
-  - {id: full, name: pinyin}
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $zrm
+    values:
+      - {id: $zrm}
+      - {id: $pinyin}
 lookup:
   dictionary: build_dict_test
-  prisms: input_types
+  prism: ${input_types}
   tag: abc
   user_dict_mode: off
   enable_completion: false
@@ -1307,32 +1319,38 @@ independent:
     the<Translator> translator(
         Translator::Require(name)->Create(Ticket(engine.get(), "lookup")));
     ASSERT_TRUE(translator);
-    ASSERT_TRUE(engine->SelectSetting("input_types", {"compact"}));
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"zrm"}));
     EXPECT_EQ("好", Query(translator.get(), "hk"));
     engine->context()->set_option("full", true);
     EXPECT_EQ("好", Query(translator.get(), "hk"));
     engine->context()->set_option("full", false);
-    ASSERT_TRUE(engine->SelectSetting("input_types", {"full"}));
-    EXPECT_FALSE(engine->context()->setting_selected("input_types", "compact"));
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"pinyin"}));
+    EXPECT_FALSE(engine->context()->setting_selected("input_types", "zrm"));
     EXPECT_EQ("好", Query(translator.get(), "hao"));
     EXPECT_TRUE(Query(translator.get(), "hk").empty());
-    ASSERT_TRUE(engine->SelectSetting("input_types", {"compact"}));
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"zrm"}));
     EXPECT_EQ("好", Query(translator.get(), "hk"));
   }
 }
 
 TEST_F(RimeBuildDictionaryTest, FuzzyGroupsSwitchAllTranslators) {
-  WriteSchema(R"YAML(fuzzy_types:
-  - {id: initial, label: Initial}
-  - {id: final, label: Final}
+  WriteSchema(R"YAML(runtime_settings:
+  fuzzy_types:
+    mode: multiple
+    default: []
+    values:
+      initial: Initial
+      final: Final
 build:
-  dictionaries:
-    build_dict_test:
-      algebra:
-        - fuzzy/^h/f/initial
-        - fuzzy/ao$/ou/final
+  $build_dict_test:
+    type: dictionary
+    fuzzy: ${fuzzy_types}
+    prism:
+      - fuzzy/^h/f/initial
+      - fuzzy/ao$/ou/final
 lookup:
-  dictionary: build_dict_test
+  dictionary: $build_dict_test
+  fuzzy: ${fuzzy_types}
   tag: abc
   user_dict_mode: off
   enable_completion: false
@@ -1367,25 +1385,36 @@ lookup:
 }
 
 TEST_F(RimeBuildDictionaryTest, RejectsInvalidTypeOptions) {
-  for (const char* options : {"[{option: zrm}, {option: zrm}]", "[]"}) {
-    WriteSchema(string(kDefinitions) + "input_types: " + options +
+  for (const char* options : {"[{id: $zrm}, {id: $zrm}]", "[]"}) {
+    WriteSchema(string(kDefinitions) +
+                "runtime_settings:\n  input_types:\n"
+                "    type: prism\n    mode: single\n    values: " +
+                options +
                 "\nlookup:\n  dictionary: build_dict_test\n"
-                "  prisms: input_types\n");
+                "  prism: ${input_types}\n");
     EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
   }
 }
 
 TEST_F(RimeBuildDictionaryTest, IncludedBuildIsIndependentOfPatchedInputTypes) {
   std::ofstream("build_dict_catalog.yaml") << kDefinitions;
-  WriteSchema(R"YAML(build:
+  WriteSchema(R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $zrm
+    values:
+      - {id: $zrm}
+build:
   __include: build_dict_catalog:/build
-input_types: [{option: zrm}]
 lookup:
   dictionary: build_dict_test
-  prisms: input_types
+  prism: ${input_types}
 )YAML");
   std::ofstream(schema_id_ + ".custom.yaml") << R"YAML(patch:
-  input_types: [{option: pinyin}]
+  runtime_settings/input_types/default: $pinyin
+  runtime_settings/input_types/values:
+    $pinyin: Full
 )YAML";
   SchemaUpdate update(schema_path_);
   const bool deployed = update.Run(&Service::instance().deployer());
@@ -1396,12 +1425,17 @@ lookup:
 }
 
 TEST_F(RimeBuildDictionaryTest, SharedPrismsArePreloaded) {
-  WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  - {option: pinyin}
-  - {option: zrm}
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
+      - {id: $zrm}
 translator:
   dictionary: build_dict_test
-  prisms: input_types
+  prism: ${input_types}
 )YAML");
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
   auto engine = OpenEngine();
@@ -1414,10 +1448,16 @@ translator:
 }
 
 TEST_F(RimeBuildDictionaryTest, RejectsMissingPrismDefinition) {
-  WriteSchema(string(kDefinitions) + R"YAML(input_types: [{option: missing}]
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $missing
+    values:
+      - {id: $missing}
 lookup:
   dictionary: build_dict_test
-  prisms: input_types
+  prism: ${input_types}
 )YAML");
   EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
 }
@@ -1443,4 +1483,83 @@ TEST_F(RimeBuildDictionaryTest,
   for (const auto& item : times)
     EXPECT_EQ(item.second, std::filesystem::last_write_time(item.first))
         << item.first;
+}
+
+TEST_F(RimeBuildDictionaryTest, SymbolicSettingBindsEachDictionary) {
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  layout:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      $pinyin: Full
+      $zrm: Compact
+first:
+  dictionary: $build_dict_test
+  prism: ${layout}
+  user_dict_mode: off
+second:
+  dictionary: $build_dict_other
+  prism: ${layout}
+  user_dict_mode: off
+)YAML");
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  auto engine = OpenEngine();
+  the<Translator> first(Translator::Require("script_translator")
+                            ->Create(Ticket(engine.get(), "first")));
+  the<Translator> second(Translator::Require("script_translator")
+                             ->Create(Ticket(engine.get(), "second")));
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  ASSERT_TRUE(engine->SelectSetting("layout", {"zrm"}));
+  EXPECT_EQ("好", Query(first.get(), "hk"));
+  EXPECT_EQ("号", Query(second.get(), "hx"));
+  EXPECT_TRUE(Query(first.get(), "hx").empty());
+  EXPECT_TRUE(Query(second.get(), "hk").empty());
+  ASSERT_TRUE(engine->SelectSetting("layout", {"pinyin"}));
+  EXPECT_EQ("好", Query(first.get(), "hao"));
+  EXPECT_EQ("号", Query(second.get(), "hao"));
+}
+
+TEST_F(RimeBuildDictionaryTest, UserDictionaryModeChangesOnlyWhileIdle) {
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  learning:
+    mode: single
+    default: 'off'
+    values:
+      'off': Off
+      manual: Manual
+      auto: Auto
+engine:
+  segmentors: [abc_segmentor]
+  translators: [script_translator]
+translator:
+  dictionary: $build_dict_test
+  prism: $pinyin
+  user_dict: build_dict_encoder
+  db_class: plain_userdb
+  user_dict_mode: ${learning}
+  enable_completion: false
+)YAML");
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  auto engine = OpenEngine();
+  ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
+  auto* context = engine->context();
+  context->set_input("hao");
+  EXPECT_FALSE(engine->SelectSetting("learning", {"manual"}));
+  EXPECT_TRUE(context->setting_selected("learning", "off"));
+  context->Clear();
+  ASSERT_TRUE(engine->SelectSetting("learning", {"manual"}));
+  EXPECT_TRUE(context->setting_selected("learning", "manual"));
+  UserDictionaryConfig config;
+  ASSERT_TRUE(UserDictionaryComponent::ResolveConfig(
+      engine->schema()->config(), "translator", &config, context));
+  EXPECT_EQ("manual", config.mode);
+  ASSERT_TRUE(engine->SelectSetting("learning", {"auto"}));
+  ASSERT_TRUE(UserDictionaryComponent::ResolveConfig(
+      engine->schema()->config(), "translator", &config, context));
+  EXPECT_EQ("auto", config.mode);
+  ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
+  EXPECT_FALSE(UserDictionaryComponent::ResolveConfig(
+      engine->schema()->config(), "translator", &config, context));
 }

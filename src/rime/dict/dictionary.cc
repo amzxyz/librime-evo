@@ -924,19 +924,22 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
                << " in schema '" << ticket.schema->schema_id() << "'.";
     return nullptr;
   }
+  if (!ResolveResourceReference(config, "dictionary", &dict_name))
+    return nullptr;
   if (dict_name.empty()) {
     return nullptr;  // not requiring static dictionary
   }
   string prism_name = prism_config.name;
   if (!prism_config.selections.empty()) {
     prism_name = prism_config.selections.front().name;
-    if (prism_config.follows_input_types) {
+    if (!prism_config.setting.empty()) {
       SettingGroupConfig types;
-      if (!types.Load(config))
+      if (!types.Load(config, prism_config.setting))
         return nullptr;
       const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
+      const auto& group = prism_config.setting;
       const auto& values =
-          context ? context->setting_values("input_types") : types.defaults;
+          context ? context->setting_values(group) : types.defaults;
       const string initial =
           values.empty() ? types.defaults.front() : values.front();
       for (const auto& selection : prism_config.selections) {
@@ -948,17 +951,19 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
   const bool default_prism = prism_name.empty();
   if (default_prism) {
     prism_name = dict_name;
-    if (auto definitions = config->GetMap("build/dictionaries")) {
-      if (auto definition = As<ConfigMap>(definitions->Get(dict_name))) {
-        auto groups = As<ConfigMap>(definition->Get("algebra"));
-        if (groups && !groups->empty())
-          prism_name = dict_name + "." + groups->begin()->first;
+    if (auto definition = FindBuildResource(config, "dictionary", dict_name)) {
+      auto groups = As<ConfigMap>(definition->Get("prism"));
+      if (groups && !groups->empty()) {
+        string name;
+        if (!ParseResourceSymbol(groups->begin()->first, &name))
+          return nullptr;
+        prism_name = dict_name + "." + name;
       }
     }
   }
   if (!config->IsNull(ticket.name_space + "/packs")) {
-    LOG(ERROR) << ticket.name_space
-               << "/packs belongs under build/dictionaries/" << dict_name;
+    LOG(ERROR) << ticket.name_space << "/packs belongs under build/$"
+               << dict_name;
     return nullptr;
   }
   vector<string> packs;
@@ -976,8 +981,7 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
     }
     auto prism =
         GetPrism(ResolvePrismName(config, dictionary->name(), selection.name));
-    if (prism_config.follows_input_types && !prism->IsOpen() &&
-        !prism->Load()) {
+    if (!prism_config.setting.empty() && !prism->IsOpen() && !prism->Load()) {
       LOG(ERROR) << "cannot preload prism '" << selection.name << "'";
       delete dictionary;
       return nullptr;
@@ -991,12 +995,10 @@ string DictionaryComponent::ResolvePrismName(Config* config,
                                              const string& dict_name,
                                              const string& prism_name) {
   const string qualified_name = dict_name + "." + prism_name;
-  if (auto definitions = config->GetMap("build/dictionaries")) {
-    if (auto definition = As<ConfigMap>(definitions->Get(dict_name))) {
-      auto groups = As<ConfigMap>(definition->Get("algebra"));
-      if (groups && groups->HasKey(prism_name))
-        return qualified_name;
-    }
+  if (auto definition = FindBuildResource(config, "dictionary", dict_name)) {
+    auto groups = As<ConfigMap>(definition->Get("prism"));
+    if (groups && groups->HasKey("$" + prism_name))
+      return qualified_name;
   }
   if (std::filesystem::exists(
           prism_resource_resolver_->ResolvePath(qualified_name))) {

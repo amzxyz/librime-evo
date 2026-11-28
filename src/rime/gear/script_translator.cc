@@ -374,24 +374,33 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
       }
     }
     config->GetString(name_space_ + "/aux", &auxiliary_type_);
-    if (auxiliary_type_ == "aux_types") {
-      if (auxiliary_types_.Load(config, "aux_types")) {
+    ParseSettingReference(auxiliary_type_, &auxiliary_setting_);
+    if (auxiliary_setting_.empty() &&
+        !ResolveResourceReference(config, "auxiliary", &auxiliary_type_))
+      auxiliary_type_.clear();
+    if (!auxiliary_setting_.empty()) {
+      if (auxiliary_types_.Load(config, auxiliary_setting_) &&
+          auxiliary_types_.mode == SettingGroupConfig::kSingle &&
+          auxiliary_types_.resource_type == "auxiliary") {
         for (const auto& item : auxiliary_types_.options) {
-          an<AuxiliaryDb> database = AuxiliaryDb::OpenShared(item.name);
+          an<AuxiliaryDb> database = AuxiliaryDb::OpenShared(item.value);
           if (!database) {
-            LOG(ERROR) << "cannot preload auxiliary group '" << item.name
+            LOG(ERROR) << "cannot preload auxiliary group '" << item.value
                        << "'";
             continue;
           }
-          auxiliary_databases_.emplace(item.name, std::move(database));
+          auxiliary_databases_.emplace(item.value, std::move(database));
         }
       } else {
         auxiliary_type_.clear();
+        auxiliary_setting_.clear();
       }
     }
     string mode;
     if (config->GetString(name_space_ + "/direct_aux_mode", &mode)) {
-      if (mode == "char")
+      if (ParseSettingReference(mode, &direct_aux_setting_)) {
+        // Resolve from the session before translating.
+      } else if (mode == "char")
         direct_aux_mode_ = DirectAuxMode::kChar;
       else if (mode == "word")
         direct_aux_mode_ = DirectAuxMode::kWord;
@@ -484,8 +493,9 @@ an<Translation> ScriptTranslator::Query(const string& input,
     if (!auxiliary_suffix.empty() && !LoadAuxiliaryMatcher())
       return nullptr;
   }
+  const auto direct_aux_mode = GetDirectAuxMode();
   const bool use_direct_char_aux =
-      direct_aux_mode_ == DirectAuxMode::kChar && LoadAuxiliaryMatcher();
+      direct_aux_mode == DirectAuxMode::kChar && LoadAuxiliaryMatcher();
 
   bool user_dict_available =
       user_dict_ && user_dict_->loaded() && !IsUserDictDisabledFor(input);
@@ -505,7 +515,7 @@ an<Translation> ScriptTranslator::Query(const string& input,
       ordinary =
           poet_->ContextualWeighted(ordinary, input, segment.start, this);
   }
-  if (suffix || direct_aux_mode_ != DirectAuxMode::kWord ||
+  if (suffix || direct_aux_mode != DirectAuxMode::kWord ||
       !LoadAuxiliaryMatcher()) {
     return ordinary;
   }
@@ -565,16 +575,31 @@ bool ScriptTranslator::SelectPrism() {
   }
   if (changed)
     auxiliary_matcher_.reset();
+
   return true;
+}
+
+ScriptTranslator::DirectAuxMode ScriptTranslator::GetDirectAuxMode() const {
+  if (direct_aux_setting_.empty())
+    return direct_aux_mode_;
+  const auto& values = engine_->context()->setting_values(direct_aux_setting_);
+  if (!values.empty()) {
+    if (values.front() == "char")
+      return DirectAuxMode::kChar;
+    if (values.front() == "word")
+      return DirectAuxMode::kWord;
+  }
+  return DirectAuxMode::kOff;
 }
 
 bool ScriptTranslator::LoadAuxiliaryMatcher() {
   string selected = auxiliary_type_;
-  if (selected == "aux_types") {
+  if (!auxiliary_setting_.empty()) {
     selected.clear();
     for (const auto& item : auxiliary_types_.options) {
-      if (engine_->context()->setting_selected("aux_types", item.option)) {
-        selected = item.name;
+      if (engine_->context()->setting_selected(auxiliary_setting_,
+                                               item.value)) {
+        selected = item.value;
         break;
       }
     }
@@ -589,7 +614,7 @@ bool ScriptTranslator::LoadAuxiliaryMatcher() {
   if (selected.empty())
     return false;
   if (!auxiliary_db_) {
-    if (auxiliary_type_ == "aux_types") {
+    if (!auxiliary_setting_.empty()) {
       const auto found = auxiliary_databases_.find(selected);
       if (found == auxiliary_databases_.end())
         return false;

@@ -28,10 +28,15 @@ class InputTypesTest : public ::testing::Test {
         user->SetString("var/type_groups/input_types_test/input_types", ""));
     engine_.reset(Engine::Create());
     auto* config = new Config;
-    std::istringstream stream(R"yaml(
-input_types:
-  - {option: zrm, label: 自然码}
-  - {option: pinyin, label: 全拼}
+    std::istringstream stream(R"yaml(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $zrm
+    values:
+      - {id: $zrm, label: 自然码}
+      - {id: $pinyin, label: 全拼}
+
 )yaml");
     ASSERT_TRUE(config->LoadFromStream(stream));
     engine_->ApplySchema(new Schema("input_types_test", config));
@@ -99,10 +104,21 @@ TEST(TypeGroupsTest, TypeChoicesPersistButOrdinarySwitchesReset) {
   ASSERT_TRUE(user->SetItem(path, nullptr));
   auto schema = [&]() {
     auto config = new Config;
-    std::istringstream data(R"YAML(input_types:
-  - {option: pinyin}
-  - {option: zrm}
-aux_types: [{option: aux_wanxiang}, {option: aux_zrm}]
+    std::istringstream data(R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
+      - {id: $zrm}
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $aux_wanxiang
+    values:
+      - {id: $aux_wanxiang}
+      - {id: $aux_zrm}
 switches:
   - name: test_toggle
     reset: 1
@@ -143,9 +159,14 @@ TEST(TypeGroupsTest, RemovedChoiceFallsBackToFirstOption) {
   the<Config> user(Config::Require("user_config")->Create("user"));
   ASSERT_TRUE(user->SetString(path, "zrm"));
   auto config = new Config;
-  std::istringstream data(R"YAML(input_types:
-  - {option: pinyin}
-  - {option: flypy}
+  std::istringstream data(R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
+      - {id: $flypy}
 )YAML");
   ASSERT_TRUE(config->LoadFromStream(data));
   the<Engine> engine(Engine::Create());
@@ -162,13 +183,22 @@ TEST(TypeGroupsTest, ApiEnumeratesDisplayReadyOptions) {
   const string filename = id + ".schema.yaml";
   {
     std::ofstream file(filename);
-    file << R"YAML(schema: {schema_id: type_options_api_test}
-input_types:
-  - {option: pinyin, label: 全拼}
-  - {option: zrm, name: custom_prism}
-aux_types:
-  - {option: aux_wanxiang, label: 万象}
-  - {option: aux_zrm, label: ""}
+    file << R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin, label: 全拼}
+      - {id: $zrm}
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $aux_wanxiang
+    values:
+      - {id: $aux_wanxiang, label: 万象}
+      - {id: $aux_zrm, label: ""}
+schema: {schema_id: type_options_api_test}
 )YAML";
     ASSERT_TRUE(file.good());
   }
@@ -225,10 +255,21 @@ TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
   ASSERT_TRUE(user->SetItem(path, nullptr));
   auto schema = [&]() {
     auto config = new Config;
-    std::istringstream data(R"YAML(input_types:
-  - {option: pinyin}
-  - {option: flypy}
-aux_types: [{option: aux_wanxiang}, {option: aux_zrm}]
+    std::istringstream data(R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
+      - {id: $flypy}
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $aux_wanxiang
+    values:
+      - {id: $aux_wanxiang}
+      - {id: $aux_zrm}
 )YAML");
     EXPECT_TRUE(config->LoadFromStream(data));
     return new Schema(schema_id, config);
@@ -268,8 +309,14 @@ TEST(TypeGroupsTest, TypedSettingsPersistValuesNotOptions) {
   auto make_schema = [&]() {
     auto config = new Config;
     std::istringstream data(R"YAML(
-input_types: [{id: pinyin}, {id: zrm}]
 runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
+      - {id: $zrm}
   feature:
     mode: boolean
     default: true

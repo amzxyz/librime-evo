@@ -121,6 +121,11 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
     return;
   if (Config* config = ticket.schema->config()) {
     prism_config_valid_ = prism_config_.Load(config, ticket.name_space);
+    string fuzzy;
+    if (config->GetString(ticket.name_space + "/fuzzy", &fuzzy)) {
+      if (!ParseSettingReference(fuzzy, &fuzzy_setting_))
+        prism_config_valid_ = false;
+    }
     config->GetString(ticket.name_space + "/delimiter", &delimiters_) ||
         config->GetString("speller/delimiter", &delimiters_);
     config->GetBool(ticket.name_space + "/contextual_suggestions",
@@ -190,11 +195,12 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
     if (!context)
       return false;
     const PrismConfig::Selection* selected =
-        prism_config_.follows_input_types ? nullptr
-                                          : &prism_config_.selections.front();
+        !prism_config_.setting.empty() ? nullptr
+                                       : &prism_config_.selections.front();
     for (const auto& selection : prism_config_.selections) {
-      if (prism_config_.follows_input_types
-              ? context->setting_selected("input_types", selection.option)
+      const auto& group = prism_config_.setting;
+      if (!prism_config_.setting.empty()
+              ? context->setting_selected(group, selection.option)
               : context->get_option(selection.option)) {
         selected = &selection;
         break;
@@ -211,8 +217,9 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
   if (!dictionary->loaded() && !dictionary->Load())
     return false;
   static const vector<string> no_fuzzy_types;
-  dictionary->SetFuzzyTypes(context ? context->setting_values("fuzzy_types")
-                                    : no_fuzzy_types);
+  dictionary->SetFuzzyTypes(context && !fuzzy_setting_.empty()
+                                ? context->setting_values(fuzzy_setting_)
+                                : no_fuzzy_types);
   if (active_prism_ != dictionary->prism()) {
     if (user_dictionary)
       user_dictionary->Attach(dictionary->primary_table(), dictionary->prism());

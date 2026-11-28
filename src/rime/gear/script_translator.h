@@ -43,6 +43,7 @@ class ScriptTranslator : public Translator,
     return !auxiliary_type_.empty();
   }
   virtual bool Memorize(const CommitEntry& commit_entry) override;
+  bool PrepareForReload() override { return FinishSession(); }
 
   string FormatPreedit(const string& preedit);
   string Spell(const Code& code);
@@ -73,6 +74,8 @@ class ScriptTranslator : public Translator,
   an<AuxiliaryDb> auxiliary_db_;
   map<string, an<AuxiliaryDb>> auxiliary_databases_;
   string auxiliary_type_;
+  string auxiliary_setting_;
+  string direct_aux_setting_;
   string active_auxiliary_type_;
   SettingGroupConfig auxiliary_types_;
   enum class DirectAuxMode { kOff, kChar, kWord };
@@ -84,6 +87,7 @@ class ScriptTranslator : public Translator,
  private:
   bool CollectSelectedPhrase(Context* ctx, DictEntry* entry);
   bool WritePhrase(Memory* writer, const DictEntry& entry, bool learn);
+  DirectAuxMode GetDirectAuxMode() const;
   bool LoadAuxiliaryMatcher();
   an<Translation> QueryDirectWordAuxiliary(const string& input,
                                            size_t start,

@@ -19,9 +19,9 @@ static void rime_levers_initialize() {
   Registry& r = Registry::instance();
 
   // Build sections are independent compiler components.
-  r.Register("build/dictionaries", new Component<DictionaryBuildCompiler>);
+  r.Register("build/dictionary", new Component<DictionaryBuildCompiler>);
   r.Register("build/auxiliary", new Component<AuxiliaryBuildCompiler>);
-  r.Register("build/rewrites", new Component<RewriteCompiler>);
+  r.Register("build/rewrite", new Component<RewriteCompiler>);
 
   // deployment tools
   r.Register("detect_modifications", new Component<DetectModifications>);

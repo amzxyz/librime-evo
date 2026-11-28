@@ -187,6 +187,7 @@ class TranslatorOptions {
   Patterns user_dict_disabling_patterns_;
   hash_set<string> blacklist_;
   PrismConfig prism_config_;
+  string fuzzy_setting_;
   bool prism_config_valid_ = true;
   an<Prism> active_prism_;
   an<CharsetPolicy> charset_policy_;

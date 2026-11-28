@@ -638,6 +638,12 @@ typedef struct RIME_FLAVORED(rime_api_t) {
                          const char* group,
                          const char* const* values,
                          size_t count);
+  //! Display label and whether the setting is fixed by schema configuration.
+  Bool (*get_setting_info)(const char* schema_id,
+                           const char* group,
+                           char* label,
+                           size_t label_size,
+                           Bool* fixed);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry

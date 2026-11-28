@@ -87,29 +87,29 @@ sort: by_weight
 丙	B
 )YAML";
     std::ofstream("aux_path_test.schema.yaml") << R"YAML(build:
-  dictionaries:
-    aux_path_test:
-      algebra:
-        pinyin: []
-        zrm:
-          - xform/^hao$/hk/
-          - xform/^zai$/zl/
-          - xform/^lin$/ln/
-          - xform/^zeng$/zg/
-          - xform/^jia$/jw/
-          - xform/^zui$/zv/
-          - xform/^kuai$/ky/
-  auxiliary:
-    dictionary: aux_path_test_aux
-    algebra:
-      aux_path_test:
+  $aux_path_test:
+    type: dictionary
+    prism:
+      $pinyin: []
+      $zrm:
+        - xform/^hao$/hk/
+        - xform/^zai$/zl/
+        - xform/^lin$/ln/
+        - xform/^zeng$/zg/
+        - xform/^jia$/jw/
+        - xform/^zui$/zv/
+        - xform/^kuai$/ky/
+  $aux_path_test_aux:
+    type: auxiliary
+    aux:
+      $aux_path_test:
         - "aux|^([a-z])[a-z]*$|$1|"
         - "aux|^([a-z]{2,})$|$1|abbrev"
         - "aux|^([a-z]{2,})$|$1/|"
         - "aux|^weak$|xy|abbrev"
         - "aux|^norm$|xy|"
         - "aux|^B$|b|abbrev"
-      aux_path_other:
+      $aux_path_other:
         - "aux|^([a-z])[a-z]*$|$1|"
         - "aux|^([a-z]{2,})$|$1/|"
 )YAML";
@@ -213,7 +213,7 @@ TEST_F(RimeAuxiliaryLookupTest,
 TEST_F(RimeAuxiliaryLookupTest, DisplayCodesAreExplicitAndGroupSpecific) {
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
-  auto rules = schema.GetList("build/auxiliary/algebra/aux_path_test");
+  auto rules = schema.GetList("build/$aux_path_test_aux/aux/$aux_path_test");
   ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^rx$|rx|abbrev,display")));
   ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^abcdef$|abcdef|display")));
   ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^rx$|rzz|")));
@@ -253,7 +253,7 @@ TEST_F(RimeAuxiliaryLookupTest, RebuildsOnlyTheChangedGroup) {
 
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
-  auto rules = schema.GetList("build/auxiliary/algebra/aux_path_other");
+  auto rules = schema.GetList("build/$aux_path_test_aux/aux/$aux_path_other");
   ASSERT_TRUE(rules);
   ASSERT_TRUE(rules->Append(New<ConfigValue>("aux|^([a-z]{2,})$|$1|")));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
@@ -271,12 +271,14 @@ TEST_F(RimeAuxiliaryLookupTest, RebuildsOnlyTheChangedGroup) {
   EXPECT_EQ(kAbbreviation, characters.front().type);
 }
 
-TEST_F(RimeAuxiliaryLookupTest, FlatRulesCompileAsAutoGroup) {
+TEST_F(RimeAuxiliaryLookupTest, ExplicitAutoResourceCompilesSelectedRules) {
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
-  auto rules = schema.GetList("build/auxiliary/algebra/aux_path_other");
+  auto rules = schema.GetList("build/$aux_path_test_aux/aux/$aux_path_other");
   ASSERT_TRUE(rules);
-  ASSERT_TRUE(schema.SetItem("build/auxiliary/algebra", rules));
+  auto groups = New<ConfigMap>();
+  groups->Set("$auto", rules);
+  ASSERT_TRUE(schema.SetItem("build/$aux_path_test_aux/aux", groups));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   ASSERT_TRUE(
       DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
@@ -289,8 +291,6 @@ TEST_F(RimeAuxiliaryLookupTest, FlatRulesCompileAsAutoGroup) {
 
 TEST_F(RimeAuxiliaryLookupTest, NoRulesDoNotReadAuxiliarySource) {
   Config schema;
-  ASSERT_TRUE(
-      schema.SetString("build/auxiliary/dictionary", "nonexistent_aux_source"));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   EXPECT_TRUE(
       DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
@@ -515,22 +515,28 @@ TEST_F(RimeAuxiliaryLookupTest, BuildAllNineColumnAuxiliaryGroups) {
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
   Config selection;
-  std::istringstream data(R"YAML(input_types: [{option: pinyin}]
+  std::istringstream data(R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {id: $pinyin}
 lookup:
   dictionary: aux_path_test
   aux: aux_path_test
 algebra:
-  aux_path_test:
+  $aux_path_test:
     - "aux|^([a-z])([a-z])(?:,[^,]*){8}$|$1|"
     - "aux|^([a-z])([a-z])(?:,[^,]*){8}$|$1$2|abbrev"
     - "aux|^([a-z])([a-z])(?:,[^,]*){8}$|$1$2/|"
-  aux_path_other:
+  $aux_path_other:
     - "aux|^[^,]*,([a-z])([a-z])(?:,[^,]*){7}$|$1$2|"
 )YAML");
   ASSERT_TRUE(selection.LoadFromStream(data));
-  schema.SetItem("input_types", selection.GetItem("input_types"));
+  schema.SetItem("runtime_settings", selection.GetItem("runtime_settings"));
   schema.SetItem("lookup", selection.GetItem("lookup"));
-  schema.SetItem("build/auxiliary/algebra", selection.GetItem("algebra"));
+  schema.SetItem("build/$aux_path_test_aux/aux", selection.GetItem("algebra"));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   ASSERT_TRUE(
       DictCompiler::CompileAuxiliary(path{"aux_path_test.schema.yaml"}));
@@ -560,13 +566,20 @@ TEST_F(RimeAuxiliaryLookupTest, AuxOptionsDoNotRestrictBuildGroups) {
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
   Config selection;
-  std::istringstream data(R"YAML(aux_types: [{option: aux_path_other}]
+  std::istringstream data(R"YAML(runtime_settings:
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $aux_path_other
+    values:
+      - {id: $aux_path_other}
 translator:
   dictionary: aux_path_test
-  aux: aux_types
+  aux: ${aux_types}
 )YAML");
   ASSERT_TRUE(selection.LoadFromStream(data));
-  ASSERT_TRUE(schema.SetItem("aux_types", selection.GetItem("aux_types")));
+  ASSERT_TRUE(schema.SetItem("runtime_settings",
+                             selection.GetItem("runtime_settings")));
   ASSERT_TRUE(schema.SetItem("translator", selection.GetItem("translator")));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   ASSERT_TRUE(
@@ -578,14 +591,21 @@ translator:
 TEST_F(RimeAuxiliaryLookupTest, RejectsMissingAuxiliaryDefinition) {
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"aux_path_test.schema.yaml"}));
-  std::istringstream settings(R"YAML(aux_types: [{option: missing}]
+  std::istringstream settings(R"YAML(runtime_settings:
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $missing
+    values:
+      - {id: $missing}
 translator:
   dictionary: aux_path_test
-  aux: aux_types
+  aux: ${aux_types}
 )YAML");
   Config input;
   ASSERT_TRUE(input.LoadFromStream(settings));
-  ASSERT_TRUE(schema.SetItem("aux_types", input.GetItem("aux_types")));
+  ASSERT_TRUE(
+      schema.SetItem("runtime_settings", input.GetItem("runtime_settings")));
   ASSERT_TRUE(schema.SetItem("translator", input.GetItem("translator")));
   ASSERT_TRUE(schema.SaveToFile(path{"aux_path_test.schema.yaml"}));
   EXPECT_FALSE(
@@ -596,9 +616,14 @@ TEST_F(RimeAuxiliaryLookupTest, SwitchesPreloadedAuxiliaryGroups) {
   database_.reset();
   auto config = std::make_unique<Config>();
   ASSERT_TRUE(config->LoadFromFile(path{"aux_path_test.schema.yaml"}));
-  std::istringstream settings(R"YAML(aux_types:
-  - {option: aux_path_test}
-  - {option: aux_path_other}
+  std::istringstream settings(R"YAML(runtime_settings:
+  aux_types:
+    type: auxiliary
+    mode: single
+    default: $aux_path_test
+    values:
+      - {id: $aux_path_test}
+      - {id: $aux_path_other}
 engine:
   segmentors: [auxiliary_suffix_segmentor, abc_segmentor, fallback_segmentor]
   translators: [script_translator]
@@ -611,18 +636,18 @@ translator:
   dictionary: aux_path_test
   prism: zrm
   user_dict_mode: off
-  aux: aux_types
+  aux: ${aux_types}
   enable_completion: false
 rules:
   - "aux|^rx$|z|"
 )YAML");
   Config input;
   ASSERT_TRUE(input.LoadFromStream(settings));
-  const vector<string> keys = {"aux_types", "engine", "speller",
+  const vector<string> keys = {"runtime_settings", "engine", "speller",
                                "auxiliary_suffix_segmentor", "translator"};
   for (const auto& key : keys)
     ASSERT_TRUE(config->SetItem(key, input.GetItem(key)));
-  ASSERT_TRUE(config->SetItem("build/auxiliary/algebra/aux_path_other",
+  ASSERT_TRUE(config->SetItem("build/$aux_path_test_aux/aux/$aux_path_other",
                               input.GetItem("rules")));
   ASSERT_TRUE(config->SaveToFile(path{"aux_path_test.schema.yaml"}));
   ASSERT_TRUE(
@@ -1012,22 +1037,22 @@ TEST_F(RimeAuxiliaryLookupTest, WordAuxiliaryRespectsCompleteTailSpelling) {
   database_->Close();
   const path schema_file{"aux_path_test.schema.yaml"};
   std::ofstream(schema_file.c_str()) << R"YAML(build:
-  dictionaries:
-    aux_path_test:
-      algebra:
-        pinyin:
-          - abbrev/^([a-z]).+$/$1/
-          - abbrev/^fan$/fa/
-        zrm:
-          - xform/^zai$/zl/
-          - xform/^fan$/fj/
-          - xform/^kuai$/ky/
-          - abbrev/^([a-z]).+$/$1/
-          - abbrev/^fj$/fa/
-  auxiliary:
-    dictionary: aux_path_test_aux
-    algebra:
-      aux_path_test:
+  $aux_path_test:
+    type: dictionary
+    prism:
+      $pinyin:
+        - abbrev/^([a-z]).+$/$1/
+        - abbrev/^fan$/fa/
+      $zrm:
+        - xform/^zai$/zl/
+        - xform/^fan$/fj/
+        - xform/^kuai$/ky/
+        - abbrev/^([a-z]).+$/$1/
+        - abbrev/^fj$/fa/
+  $aux_path_test_aux:
+    type: auxiliary
+    aux:
+      $aux_path_test:
         - "aux|^([a-z])[a-z]*$|$1|"
         - "aux|^([a-z]{2,})$|$1|abbrev"
 )YAML";
@@ -1127,16 +1152,16 @@ TEST_F(RimeAuxiliaryLookupTest, DirectAuxModesAreExclusive) {
   database_->Close();
   const path schema_file{"aux_path_test.schema.yaml"};
   std::ofstream(schema_file.c_str()) << R"YAML(build:
-  dictionaries:
-    aux_path_test:
-      algebra:
-        zrm:
-          - xform/^zai$/zl/
-          - xform/^fan$/fj/
-  auxiliary:
-    dictionary: aux_path_test_aux
-    algebra:
-      aux_path_test:
+  $aux_path_test:
+    type: dictionary
+    prism:
+      $zrm:
+        - xform/^zai$/zl/
+        - xform/^fan$/fj/
+  $aux_path_test_aux:
+    type: auxiliary
+    aux:
+      $aux_path_test:
         - "aux|^([a-z])[a-z]*$|$1|"
         - "aux|^([a-z]{2,})$|$1|abbrev"
 )YAML";

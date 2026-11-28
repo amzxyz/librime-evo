@@ -4,6 +4,7 @@
 
 #include <utf8.h>
 #include <rime/config.h>
+#include <rime/config/resource_config.h>
 #include <rime/context.h>
 #include <rime/dict/rewrite_store.h>
 #include <rime/segmentation.h>
@@ -92,7 +93,8 @@ struct Checker {
 an<CharsetPolicy> CharsetPolicy::Load(Config* config,
                                       const string& name_space) {
   string data;
-  if (!config || !config->GetString(name_space + "/data", &data))
+  if (!config || !config->GetString(name_space + "/data", &data) ||
+      !ResolveResourceReference(config, "rewrite", &data))
     return nullptr;
   auto policy = New<CharsetPolicy>();
   policy->resource_ = RewriteResource::Require(data);

@@ -33,6 +33,7 @@ class TableTranslator : public Translator,
                       const Segment& segment,
                       vector<CodeChoice>* result) override;
   virtual bool Memorize(const CommitEntry& commit_entry);
+  bool PrepareForReload() override { return FinishSession(); }
 
   an<Translation> MakeSentence(const string& input,
                                size_t start,

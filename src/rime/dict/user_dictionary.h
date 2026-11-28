@@ -52,6 +52,7 @@ using UserDictEntryCollector = map<size_t, UserDictEntryIterator>;
 
 class Schema;
 class Config;
+class Context;
 class Table;
 class Prism;
 class Db;
@@ -185,7 +186,9 @@ class UserDictionaryComponent : public UserDictionary::Component {
   UserDictionaryComponent();
   static bool ResolveConfig(Config* config,
                             const string& name_space,
-                            UserDictionaryConfig* result);
+                            UserDictionaryConfig* result,
+                            const Context* context = nullptr,
+                            bool include_inactive = false);
   UserDictionary* Create(const Ticket& ticket);
   UserDictionary* Create(const string& dict_name, const string& db_class);
 

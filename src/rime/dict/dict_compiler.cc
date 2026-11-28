@@ -26,7 +26,9 @@
 #include <rime/dict/entry_collector.h>
 #include <rime/dict/preset_vocabulary.h>
 #include <rime/dict/prism.h>
-#include <rime/dict/prism_config.h>
+#include <rime/config/resource_config.h>
+#include <rime/config/runtime_settings.h>
+#include <rime/dict/schema_resource_validation.h>
 #include <rime/dict/reverse_lookup_dictionary.h>
 #include <rime/dict/table.h>
 #include <rime/resource.h>
@@ -334,28 +336,23 @@ uint64_t DictCompiler::EstimateMemory(const string& dict_name,
 
 bool DictCompiler::ReadDictionarySpecs(Config* schema,
                                        vector<DictionarySpec>* definitions) {
-  if (!schema || !definitions || !PrismConfig::ValidateReferences(schema))
+  if (!schema || !definitions)
     return false;
   definitions->clear();
-  SettingGroupConfig fuzzy;
-  if (!fuzzy.Load(schema, "fuzzy_types"))
+  vector<BuildResource> resources;
+  if (!ReadBuildResources(schema, &resources))
     return false;
-  if (schema->IsNull("build/dictionaries"))
-    return true;
-  auto dictionaries = schema->GetMap("build/dictionaries");
-  if (!dictionaries) {
-    LOG(ERROR) << "build/dictionaries must be a map keyed by dictionary name";
-    return false;
-  }
 
   hash_set<string> table_names;
   hash_set<string> prism_names;
-  for (const auto& item : *dictionaries) {
-    auto entry = As<ConfigMap>(item.second);
+  for (const auto& item : resources) {
+    if (item.type != "dictionary")
+      continue;
+    auto entry = item.definition;
     DictionarySpec definition;
-    definition.name = item.first;
+    definition.name = item.name;
     if (definition.name.empty() || !entry) {
-      LOG(ERROR) << "build/dictionaries entries require a nonempty dictionary "
+      LOG(ERROR) << "dictionary declarations require a nonempty dictionary "
                     "name and a map of build settings";
       return false;
     }
@@ -390,7 +387,17 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
         definition.packs.push_back(pack->str());
       }
     }
-    auto algebra = entry->Get("algebra");
+    SettingGroupConfig fuzzy;
+    if (auto reference = entry->GetValue("fuzzy")) {
+      string group;
+      if (!ParseSettingReference(reference->str(), &group) ||
+          !fuzzy.Load(schema, group) ||
+          fuzzy.mode != SettingGroupConfig::kMultiple ||
+          !fuzzy.resource_type.empty() ||
+          fuzzy.options.size() > kMaxFuzzyGroups)
+        return false;
+    }
+    auto algebra = entry->Get("prism");
     if (!algebra || As<ConfigList>(algebra)) {
       definition.prisms.emplace_back(definition.name, As<ConfigList>(algebra));
     } else if (auto groups = As<ConfigMap>(algebra)) {
@@ -406,8 +413,10 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
                      << definition.name << "'";
           return false;
         }
-        definition.prisms.emplace_back(definition.name + "." + group.first,
-                                       rules);
+        string name = group.first;
+        if (!ParseResourceSymbol(group.first, &name))
+          return false;
+        definition.prisms.emplace_back(definition.name + "." + name, rules);
       }
     } else {
       LOG(ERROR) << "build dictionary '" << definition.name
@@ -472,7 +481,7 @@ bool DictCompiler::CompileDictionary(const DictionarySpec& definition,
 
 bool DictCompiler::CompileDictionaries(const path& schema_file, int options) {
   Config schema;
-  if (!schema.LoadFromFile(schema_file))
+  if (!schema.LoadFromFile(schema_file) || !ValidateSchemaResources(&schema))
     return false;
   vector<DictionarySpec> definitions;
   if (!ReadDictionarySpecs(&schema, &definitions))
@@ -792,36 +801,31 @@ static bool BuildAuxiliaryDatabase(const ReverseLookupTable& sources,
   return database.Build(by_character, by_code, checksum) && database.Save();
 }
 
-bool DictCompiler::ReadAuxiliarySpecs(
-    Config* schema,
-    vector<pair<string, an<ConfigList>>>* groups) {
-  if (!schema || !groups)
+bool DictCompiler::ReadAuxiliaryBuildSpecs(Config* schema,
+                                           vector<AuxiliarySpec>* sources) {
+  sources->clear();
+  vector<BuildResource> resources;
+  if (!ReadBuildResources(schema, &resources))
     return false;
-  if (!schema->IsNull("build/auxiliary") &&
-      !schema->GetMap("build/auxiliary")) {
-    LOG(ERROR) << "build/auxiliary must be a map";
-    return false;
-  }
-  groups->clear();
-  if (auto rules = schema->GetList("build/auxiliary/algebra")) {
-    groups->emplace_back("auto", rules);
-  } else if (auto named = schema->GetMap("build/auxiliary/algebra")) {
-    for (const auto& item : *named) {
+  set<string> names;
+  for (const auto& resource : resources) {
+    if (resource.type != "auxiliary")
+      continue;
+    auto groups = As<ConfigMap>(resource.definition->Get("aux"));
+    if (!groups || groups->begin() == groups->end())
+      return false;
+    AuxiliarySpec source;
+    source.source = resource.name;
+    for (const auto& item : *groups) {
+      string name;
       auto rules = As<ConfigList>(item.second);
-      if (!rules) {
-        LOG(ERROR) << "build/auxiliary/algebra group '" << item.first
-                   << "' is not a list";
+      if (!ParseResourceSymbol(item.first, &name) || !rules ||
+          !names.insert(name).second)
         return false;
-      }
-      groups->emplace_back(item.first, rules);
+      source.groups.emplace_back(name, rules);
     }
-  } else if (!schema->IsNull("build/auxiliary/algebra")) {
-    LOG(ERROR) << "build/auxiliary/algebra must be a list or a map of lists";
-    return false;
+    sources->push_back(std::move(source));
   }
-  // Validate references without deriving compile tasks from consumers.
-  if (!PrismConfig::ValidateReferences(schema))
-    return false;
   return true;
 }
 
@@ -829,22 +833,14 @@ bool DictCompiler::CompileAuxiliary(const path& schema_file, bool rebuild) {
   if (schema_file.empty())
     return true;
   Config schema;
-  if (!schema.LoadFromFile(schema_file))
+  vector<AuxiliarySpec> sources;
+  if (!schema.LoadFromFile(schema_file) || !ValidateSchemaResources(&schema) ||
+      !ReadAuxiliaryBuildSpecs(&schema, &sources))
     return false;
-  vector<pair<string, an<ConfigList>>> groups;
-  if (!ReadAuxiliarySpecs(&schema, &groups))
-    return false;
-  if (groups.empty())
-    return true;
-
-  string source_name;
-  if (!schema.GetString("build/auxiliary/dictionary", &source_name) ||
-      source_name.empty()) {
-    LOG(ERROR)
-        << "build/auxiliary/dictionary is required for auxiliary algebra";
-    return false;
-  }
-  return CompileAuxiliary(source_name, groups, rebuild);
+  for (const auto& source : sources)
+    if (!CompileAuxiliary(source.source, source.groups, rebuild))
+      return false;
+  return true;
 }
 
 bool DictCompiler::CompileAuxiliary(
@@ -876,7 +872,7 @@ bool DictCompiler::CompileAuxiliary(
     for (const auto& item : *group.second) {
       auto rule = As<ConfigValue>(item);
       if (!rule) {
-        LOG(ERROR) << "build/auxiliary/algebra group '" << group.first
+        LOG(ERROR) << "auxiliary group '" << group.first
                    << "' contains a non-string rule";
         return false;
       }

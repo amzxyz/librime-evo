@@ -3,6 +3,9 @@
 #include <rime/config.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/config/resource_config.h>
+#include <rime/config/runtime_settings.h>
+#include <rime/dict/schema_resource_validation.h>
 #include <rime/schema.h>
 #include <rime_api.h>
 
@@ -24,6 +27,117 @@ switches:
   std::istringstream yaml(reset ? forced : remembered);
   EXPECT_TRUE(config->LoadFromStream(yaml));
   return new Schema(id, config);
+}
+
+TEST(SchemaSwitchesTest, ResourceSymbolsAndFixedSettings) {
+  string name;
+  EXPECT_TRUE(ParseResourceSymbol("$pinyin", &name));
+  EXPECT_EQ("pinyin", name);
+  EXPECT_FALSE(ParseResourceSymbol("${input_types}", &name));
+  EXPECT_TRUE(ParseSettingReference("${input_types}", &name));
+  EXPECT_EQ("input_types", name);
+  EXPECT_FALSE(ParseSettingReference("prefix_${input_types}", &name));
+  Config config;
+  std::istringstream yaml(R"(
+runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    fixed: $zrm
+    values:
+      $pinyin: Full
+      $zrm: Double
+)");
+  ASSERT_TRUE(config.LoadFromStream(yaml));
+  map<string, SettingGroupConfig> groups;
+  ASSERT_TRUE(SettingGroupConfig::LoadGroups(&config, &groups));
+  ASSERT_EQ(1u, groups.size());
+  const auto& setting = groups.at("input_types");
+  EXPECT_EQ("prism", setting.resource_type);
+  const auto restored = setting.RestoreValues(nullptr, "test", "input_types");
+  EXPECT_EQ(vector<string>{"zrm"}, restored);
+  Config user;
+  EXPECT_FALSE(setting.SaveValues(&user, "test", "input_types", {"pinyin"}));
+}
+
+TEST(SchemaSwitchesTest, FixedSettingPreservesSavedChoice) {
+  Config config, user;
+  std::istringstream yaml(R"(
+runtime_settings:
+  layout:
+    mode: single
+    default: full
+    fixed: compact
+    values:
+      full: Full
+      compact: Compact
+)");
+  ASSERT_TRUE(config.LoadFromStream(yaml));
+  ASSERT_TRUE(user.SetString("var/type_groups/test/layout", "full"));
+  SettingGroupConfig setting;
+  ASSERT_TRUE(setting.Load(&config, "layout"));
+  EXPECT_EQ((vector<string>{"compact"}),
+            setting.RestoreValues(&user, "test", "layout"));
+  EXPECT_FALSE(setting.SaveValues(&user, "test", "layout", {"full"}));
+  ASSERT_TRUE(config.SetItem("runtime_settings/layout/fixed", nullptr));
+  ASSERT_TRUE(setting.Load(&config, "layout"));
+  EXPECT_EQ((vector<string>{"full"}),
+            setting.RestoreValues(&user, "test", "layout"));
+}
+
+TEST(SchemaSwitchesTest, ResolveResourcesWithoutRewritingConfig) {
+  Config config;
+  std::istringstream yaml(R"(
+build:
+  $example:
+    type: dictionary
+    prism:
+      $pinyin:
+        - derive/^zh/z/
+  $aux_code:
+    type: auxiliary
+    aux:
+      $aux_example:
+        - derive/a/b/
+  $emoji:
+    type: rewrite
+    files:
+      - data/emoji.txt
+translator:
+  dictionary: $example
+  prism: $pinyin
+  aux: $aux_example
+emoji:
+  data: $emoji
+  option: emoji
+)");
+  ASSERT_TRUE(config.LoadFromStream(yaml));
+  vector<BuildResource> resources;
+  ASSERT_TRUE(ReadBuildResources(&config, &resources));
+  EXPECT_EQ(3u, resources.size());
+  string name = "$example";
+  EXPECT_TRUE(ResolveResourceReference(&config, "dictionary", &name));
+  EXPECT_EQ("example", name);
+  name = "$pinyin";
+  EXPECT_TRUE(ResolvePrismReference(&config, "example", &name));
+  EXPECT_EQ("pinyin", name);
+  name = "$aux_example";
+  EXPECT_TRUE(ResolveResourceReference(&config, "auxiliary", &name));
+  EXPECT_EQ("aux_example", name);
+  name = "$emoji";
+  EXPECT_TRUE(ResolveResourceReference(&config, "rewrite", &name));
+  EXPECT_EQ("emoji", name);
+  name = "$emoji";
+  EXPECT_FALSE(ResolveResourceReference(&config, "dictionary", &name));
+  name = "$missing";
+  EXPECT_FALSE(ResolvePrismReference(&config, "example", &name));
+  EXPECT_TRUE(config.GetList("build/$example/prism/$pinyin"));
+  EXPECT_TRUE(config.GetList("build/$aux_code/aux/$aux_example"));
+  EXPECT_TRUE(config.GetList("build/$emoji/files"));
+  EXPECT_TRUE(config.GetString("translator/dictionary", &name));
+  EXPECT_EQ("$example", name);
+  EXPECT_TRUE(ValidateSchemaResources(&config));
 }
 
 TEST(SchemaSwitchesTest, IsolatedSelectionAndTemporaryState) {

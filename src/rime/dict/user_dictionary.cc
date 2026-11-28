@@ -14,6 +14,10 @@
 #include <rime/common.h>
 #include <rime/language.h>
 #include <rime/schema.h>
+#include <rime/config/resource_config.h>
+#include <rime/config/runtime_settings.h>
+#include <rime/context.h>
+#include <rime/engine.h>
 #include <rime/service.h>
 #include <rime/ticket.h>
 #include <rime/algo/dynamics.h>
@@ -895,11 +899,40 @@ UserDictionary* UserDictionaryComponent::Create(const string& dict_name,
 
 bool UserDictionaryComponent::ResolveConfig(Config* config,
                                             const string& name_space,
-                                            UserDictionaryConfig* result) {
+                                            UserDictionaryConfig* result,
+                                            const Context* context,
+                                            bool include_inactive) {
   if (!config || !result)
     return false;
   UserDictionaryConfig resolved;
   config->GetString(name_space + "/user_dict_mode", &resolved.mode);
+  string group;
+  if (ParseSettingReference(resolved.mode, &group)) {
+    SettingGroupConfig setting;
+    if (!setting.Load(config, group) ||
+        setting.mode != SettingGroupConfig::kSingle ||
+        !setting.resource_type.empty())
+      return false;
+    for (const auto& choice : setting.options)
+      if (choice.value != "auto" && choice.value != "manual" &&
+          choice.value != "off")
+        return false;
+    const auto& selected =
+        context ? context->setting_values(group) : setting.defaults;
+    if (selected.size() != 1)
+      return false;
+    resolved.mode = selected.front();
+    // Synchronization collects schema-declared databases, including ones
+    // which can be enabled through a runtime variable.
+    if (include_inactive && !setting.fixed && resolved.mode == "off") {
+      for (const auto& choice : setting.options) {
+        if (choice.value != "off") {
+          resolved.mode = choice.value;
+          break;
+        }
+      }
+    }
+  }
   if (resolved.mode == "off")
     return false;
   if (resolved.mode != "auto" && resolved.mode != "manual") {
@@ -913,6 +946,8 @@ bool UserDictionaryComponent::ResolveConfig(Config* config,
       LOG(ERROR) << name_space << "/dictionary not specified in schema.";
       return false;
     }
+    if (!ResolveResourceReference(config, "dictionary", &dictionary))
+      return false;
     resolved.name = Language::get_language_component(dictionary);
   }
   config->GetString(name_space + "/db_class", &resolved.db_class);
@@ -923,7 +958,8 @@ bool UserDictionaryComponent::ResolveConfig(Config* config,
 UserDictionary* UserDictionaryComponent::Create(const Ticket& ticket) {
   UserDictionaryConfig config;
   if (!ticket.schema ||
-      !ResolveConfig(ticket.schema->config(), ticket.name_space, &config))
+      !ResolveConfig(ticket.schema->config(), ticket.name_space, &config,
+                     ticket.engine ? ticket.engine->context() : nullptr))
     return nullptr;
   auto user_dict = Create(config.name, config.db_class);
   if (user_dict)

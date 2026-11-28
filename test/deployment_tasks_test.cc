@@ -163,10 +163,10 @@ version: "1"
   version: "1"
   dependencies: [workspace_prism_sub]
 build:
-  dictionaries:
-    workspace_prism:
-      algebra:
-        shared: [xform/^ni$/ab/]
+  $workspace_prism:
+    type: dictionary
+    prism:
+      $shared: [xform/^ni$/ab/]
 )YAML";
   }
 
@@ -192,11 +192,11 @@ build:
   schema_id: workspace_prism_sub
   version: "1"
 build:
-  dictionaries:
-    workspace_prism:
-      algebra:
-        standalone: [xform/^ni$/jt/]
-        shared: [xform/^ni$/)YAML" << shared_spelling << "/]\n";
+  $workspace_prism:
+    type: dictionary
+    prism:
+      $standalone: [xform/^ni$/jt/]
+      $shared: [xform/^ni$/)YAML" << shared_spelling << "/]\n";
   }
 
   Deployer& deployer_ = Service::instance().deployer();
@@ -332,7 +332,8 @@ TEST_F(RimeWorkspacePrismTest, SharesPrismOnlyWhenAlgebraMatches) {
 TEST_F(RimeWorkspacePrismTest, RewriteKeyValueResourceWithoutFilter) {
   std::ofstream(root_ / "charset.tsv") << "# charset\n一\tTabfghjtu\n";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/rewrites/charset:
+  build/$charset:
+    type: rewrite
     files: [charset.tsv]
 )YAML";
   WorkspaceUpdate update;
@@ -360,7 +361,8 @@ TEST_F(RimeWorkspacePrismTest, RewriteKeyValueResourceWithoutFilter) {
 TEST_F(RimeWorkspacePrismTest, CharsetPolicyRulesAndExemptions) {
   std::ofstream(root_ / "charset.tsv") << "你\ta\n妳\tT\n𰻞\tT\n";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/rewrites/charset:
+  build/$charset:
+    type: rewrite
     files: [charset.tsv]
 )YAML";
   ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
@@ -431,7 +433,8 @@ version: "1"
     charset: charset
     max_homophones: 1
     enable_completion: false
-  build/rewrites/charset:
+  build/$charset:
+    type: rewrite
     files: [charset.tsv]
   charset:
     data: charset
@@ -472,7 +475,8 @@ TEST_F(RimeWorkspacePrismTest, DeploysAndSwitchesConditionalRewriter) {
     dictionary: workspace_prism
     prism: shared
     user_dict_mode: off
-  build/rewrites/rewrite_test:
+  build/$rewrite_test:
+    type: rewrite
     files: [rewrite.tsv]
   rewrite_test:
     data: rewrite_test
@@ -513,7 +517,7 @@ class ProbeBuildCompiler : public BuildCompiler {
 
   bool Collect(const BuildRequest& request, BuildPlan* plan) override {
     string value;
-    if (!request.config->GetString("build/probe/value", &value))
+    if (!request.config->GetString("build/$probe/value", &value))
       return false;
     const path target = deployer_->staging_dir / "probe.bin";
     const path table = deployer_->staging_dir / "workspace_prism.table.bin";
@@ -550,7 +554,8 @@ RIME_REGISTER_DEPLOYER_MODULE(deploy_probe)
 TEST_F(RimeWorkspacePrismTest, RegisteredBuildCompilerWorksInBothDeployments) {
   EXPECT_FALSE(BuildCompiler::Require("build/probe"));
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/probe:
+  build/$probe:
+    type: probe
     value: ready
 )YAML";
   WorkspaceUpdate workspace;
@@ -578,14 +583,17 @@ TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
   std::ofstream(root_ / "rewrite.tsv") << "你\t妳\n";
   std::ofstream(root_ / "other.tsv") << "你\t他\n";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/rewrites/shared:
+  build/$shared:
+    type: rewrite
     files: [rewrite.tsv]
-  build/rewrites/alias:
+  build/$alias:
+    type: rewrite
     files: [rewrite.tsv]
 )YAML";
   const auto sub = root_ / "workspace_prism_sub.custom.yaml";
   std::ofstream(sub) << R"YAML(patch:
-  build/rewrites/shared:
+  build/$shared:
+    type: rewrite
     files: [rewrite.tsv]
 )YAML";
   WorkspaceUpdate update;
@@ -602,7 +610,8 @@ TEST_F(RimeWorkspacePrismTest, SharesNamedRewritesAndRejectsConflictingData) {
 
   const auto old_time = fs::last_write_time(sub);
   std::ofstream(sub) << R"YAML(patch:
-  build/rewrites/shared:
+  build/$shared:
+    type: rewrite
     files: [other.tsv]
 )YAML";
   fs::last_write_time(sub, old_time + std::chrono::seconds(2));
@@ -629,7 +638,7 @@ TEST_F(RimeWorkspacePrismTest, NotifiesOnceForWholeSchemaBatch) {
     const path table = deployer_.staging_dir / "workspace_prism.table.bin";
     EXPECT_FALSE(fs::exists(table));
     std::ofstream(root_ / "workspace_prism_main.custom.yaml")
-        << "patch:\n  build/probe:\n    value: prepared\n";
+        << "patch:\n  build/$probe:\n    type: probe\n    value: prepared\n";
   };
   auto complete = [&](Deployer* deployer, const DeploymentResult& result) {
     EXPECT_EQ(&deployer_, deployer);
@@ -782,11 +791,11 @@ TEST(RimeBuildPlanTest, ResourceAliasesResolveToOneUnit) {
 TEST_F(RimeWorkspacePrismTest, ForcedCompilationRebuildsAuxiliaryGroups) {
   std::ofstream(root_ / "aux.yaml") << "你\trx\n";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/auxiliary:
-    dictionary: aux
-    algebra:
-      direct: ["aux|^([a-z]+)$|$1|"]
-      suffix: ["aux|^([a-z]+)$|$1/|"]
+  build/$aux:
+    type: auxiliary
+    aux:
+      $direct: ["aux|^([a-z]+)$|$1|"]
+      $suffix: ["aux|^([a-z]+)$|$1/|"]
 )YAML";
   ASSERT_TRUE(WorkspaceUpdate().Run(&deployer_));
   const path direct = deployer_.staging_dir / "direct.aux.bin";
@@ -819,16 +828,16 @@ TEST_F(RimeWorkspacePrismTest, RejectsConflictingAuxiliaryGroups) {
     - schema: workspace_prism_sub
 )YAML";
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/auxiliary:
-    dictionary: aux
-    algebra:
-      test: [xform/a/b/]
+  build/$aux:
+    type: auxiliary
+    aux:
+      $test: [xform/a/b/]
 )YAML";
   std::ofstream(root_ / "workspace_prism_sub.custom.yaml") << R"YAML(patch:
-  build/auxiliary:
-    dictionary: aux
-    algebra:
-      test: [xform/a/c/]
+  build/$aux:
+    type: auxiliary
+    aux:
+      $test: [xform/a/c/]
 )YAML";
   EXPECT_FALSE(WorkspaceUpdate().Run(&deployer_));
   EXPECT_FALSE(fs::exists(deployer_.staging_dir / "test.aux.bin"));
@@ -836,7 +845,7 @@ TEST_F(RimeWorkspacePrismTest, RejectsConflictingAuxiliaryGroups) {
 
 TEST_F(RimeWorkspacePrismTest, FailedConfigBuildIsReported) {
   std::ofstream(root_ / "workspace_prism_main.custom.yaml") << R"YAML(patch:
-  build/dictionaries/workspace_prism:
+  build/$workspace_prism:
     __include: missing_config:/missing
 )YAML";
   int notifications = 0;

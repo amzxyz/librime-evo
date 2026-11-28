@@ -12,7 +12,8 @@
 #include <rime/context.h>
 #include <rime/config/config_types.h>
 #include <rime/engine.h>
-#include <rime/dict/prism_config.h>
+#include <rime/config/resource_config.h>
+#include <rime/config/runtime_settings.h>
 #include <rime/dict/auxiliary_db.h>
 #include <rime/dict/dictionary.h>
 #include <rime/dict/mapped_file.h>
@@ -44,6 +45,7 @@ struct Condition {
 template <typename T>
 struct ComponentEntry {
   an<T> component;
+  string prescription;
   Condition condition;
   bool has_condition = false;
   bool enabled = true;
@@ -125,7 +127,7 @@ class ConcreteEngine : public Engine {
   void OnContextUpdate(Context* ctx);
   void OnOptionUpdate(Context* ctx, const string& option);
   void OnPropertyUpdate(Context* ctx, const string& property);
-  void InitializeTypeGroups();
+  void InitializeRuntimeSettings();
 
   vector<ComponentEntry<Processor>> processors_;
   vector<ComponentEntry<Segmentor>> segmentors_;
@@ -134,7 +136,7 @@ class ConcreteEngine : public Engine {
   vector<of<Formatter>> formatters_;
   vector<of<Processor>> post_processors_;
   an<Switcher> switcher_;
-  map<string, SettingGroupConfig> type_groups_;
+  map<string, SettingGroupConfig> runtime_settings_;
   bool applying_switch_ = false;
   set<string> schema_switches_;
 };
@@ -244,15 +246,15 @@ void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
   NotifyOption(ctx, option);
 }
 
-void ConcreteEngine::InitializeTypeGroups() {
+void ConcreteEngine::InitializeRuntimeSettings() {
   context_->ClearSettings();
-  type_groups_.clear();
-  if (!SettingGroupConfig::LoadGroups(schema_->config(), &type_groups_)) {
-    type_groups_.clear();
+  runtime_settings_.clear();
+  if (!SettingGroupConfig::LoadGroups(schema_->config(), &runtime_settings_)) {
+    runtime_settings_.clear();
     return;
   }
   auto* user = switcher_ ? switcher_->user_config() : nullptr;
-  for (const auto& [group, setting] : type_groups_) {
+  for (const auto& [group, setting] : runtime_settings_) {
     context_->SetSettingValues(
         group, setting.RestoreValues(user, schema_->schema_id(), group));
   }
@@ -260,14 +262,60 @@ void ConcreteEngine::InitializeTypeGroups() {
 
 bool ConcreteEngine::SelectConfiguredSetting(const string& group,
                                              vector<string> values) {
-  auto found = type_groups_.find(group);
-  if (found == type_groups_.end() || !found->second.Normalize(&values))
+  auto found = runtime_settings_.find(group);
+  if (found == runtime_settings_.end() || !found->second.Normalize(&values))
     return false;
+  if (found->second.fixed)
+    return false;
+  const bool changed = context_->setting_values(group) != values;
+  vector<size_t> reload;
+  if (changed) {
+    for (size_t i = 0; i < translators_.size(); ++i) {
+      const auto& entry = translators_[i];
+      Ticket ticket(this, "translator", entry.prescription);
+      if (ticket.klass != "script_translator" &&
+          ticket.klass != "table_translator")
+        continue;
+      string value, dependency;
+      if (schema_->config()->GetString(ticket.name_space + "/user_dict_mode",
+                                       &value) &&
+          ParseSettingReference(value, &dependency) && dependency == group)
+        reload.push_back(i);
+    }
+    // Confirmed phrases and lazy translations can hold the old UserDB and
+    // Language objects. Never replace them during composition.
+    if (!reload.empty() && context_->IsComposing())
+      return false;
+    for (size_t index : reload)
+      if (!translators_[index].component->PrepareForReload())
+        return false;
+  }
+  const auto previous = context_->setting_values(group);
+  vector<pair<size_t, an<Translator>>> replacements;
+  if (!reload.empty()) {
+    context_->SetSettingValues(group, values);
+    for (size_t index : reload) {
+      const auto& entry = translators_[index];
+      Ticket ticket(this, "translator", entry.prescription);
+      auto* factory = Translator::Require(ticket.klass);
+      an<Translator> next(factory ? factory->Create(ticket) : nullptr);
+      if (!next) {
+        context_->SetSettingValues(group, previous);
+        return false;
+      }
+      replacements.emplace_back(index, std::move(next));
+    }
+  }
   auto* user = switcher_ ? switcher_->user_config() : nullptr;
-  if (!found->second.SaveValues(user, schema_->schema_id(), group, values))
+  if (!found->second.SaveValues(user, schema_->schema_id(), group, values)) {
+    if (!reload.empty())
+      context_->SetSettingValues(group, previous);
     return false;
-  if (context_->setting_values(group) != values) {
+  }
+  if (changed) {
     context_->SetSettingValues(group, std::move(values));
+    for (auto& replacement : replacements)
+      translators_[replacement.first].component = std::move(replacement.second);
     RefreshOptionComponents(context_.get());
     message_sink_("setting", group);
   }
@@ -635,7 +683,8 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
   };
   auto add_rewrite = [&](const string& name_space) {
     string data;
-    if (config->GetString(name_space + "/data", &data) && !data.empty())
+    if (config->GetString(name_space + "/data", &data) &&
+        ResolveResourceReference(config, "rewrite", &data) && !data.empty())
       rewrites.insert(data);
   };
   if (auto list = config->GetList("engine/translators")) {
@@ -656,6 +705,7 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
         string name;
         auto* factory = Dictionary::Require("dictionary");
         if (factory && config->GetString(ns + "/dictionary", &name) &&
+            ResolveResourceReference(config, "dictionary", &name) &&
             !name.empty()) {
           prepare(name, [&]() -> an<void> {
             an<Dictionary> dict(factory->Create(ticket));
@@ -670,13 +720,16 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
         grammar = true;
         string aux;
         if (config->GetString(ns + "/aux", &aux)) {
-          if (aux == "aux_types") {
+          string group;
+          ParseSettingReference(aux, &group);
+          if (!group.empty()) {
             SettingGroupConfig types;
-            if (types.Load(config, "aux_types")) {
+            if (types.Load(config, group)) {
               for (const auto& type : types.options)
-                auxiliary.insert(type.name);
+                auxiliary.insert(type.value);
             }
-          } else if (!aux.empty()) {
+          } else if (ResolveResourceReference(config, "auxiliary", &aux) &&
+                     !aux.empty()) {
             auxiliary.insert(aux);
           }
         }
@@ -770,6 +823,7 @@ inline void CreateComponentsFromList(
       }
       an<T> instance(component);
       entry.component = instance;
+      entry.prescription = prescription;
       UpdateComponentEnabled(entry, engine->context());
       target_collection.push_back(entry);
     }
@@ -801,7 +855,7 @@ void ConcreteEngine::InitializeComponents() {
   if (!config)
     return;
 
-  InitializeTypeGroups();
+  InitializeRuntimeSettings();
   InitializeOptions();
 
   // Create components using inline template function

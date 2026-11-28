@@ -5,6 +5,8 @@
 #include <rime/lever/build_compiler.h>
 
 #include <rime/config.h>
+#include <rime/config/resource_config.h>
+#include <rime/dict/schema_resource_validation.h>
 #include <rime/setup.h>
 
 namespace rime {
@@ -25,17 +27,18 @@ bool BuildPlan::Collect(const string& schema_id,
     valid_ = false;
     return false;
   }
-  if (config->IsNull("build"))
-    return true;
-  auto build = config->GetMap("build");
-  if (!build) {
-    LOG(ERROR) << "build must be a map of resource definitions.";
+  vector<BuildResource> resources;
+  if (!ReadBuildResources(config, &resources) ||
+      !ValidateSchemaResources(config)) {
     valid_ = false;
     return false;
   }
   const BuildRequest request{schema_id, config, schema_file, rebuild_, dump_};
-  for (const auto& entry : *build) {
-    const string key = "build/" + entry.first;
+  set<string> types;
+  for (const auto& resource : resources)
+    types.insert(resource.type);
+  for (const auto& type : types) {
+    const string key = "build/" + type;
     auto it = compilers_.find(key);
     if (it == compilers_.end()) {
       auto* component = BuildCompiler::Require(key);

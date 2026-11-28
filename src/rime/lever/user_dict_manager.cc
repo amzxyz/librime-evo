@@ -679,7 +679,7 @@ bool UserDictManager::GetSyncUserDictList(UserDictList* names) {
         continue;
       UserDictionaryConfig user_dict;
       if (!UserDictionaryComponent::ResolveConfig(&schema, ticket.name_space,
-                                                  &user_dict) ||
+                                                  &user_dict, nullptr, true) ||
           user_dict.db_class != "userdb")
         continue;
       if (!safe_path::ValidRelativeName(user_dict.name)) {

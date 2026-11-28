@@ -20,7 +20,6 @@
 #include <rime/setup.h>
 #include <rime/algo/fs.h>
 #include <rime/algo/utilities.h>
-#include <rime/dict/prism_config.h>
 #include <rime/lever/build_compiler.h>
 #include <rime/lever/deployment_tasks.h>
 #include <rime/lever/user_dict_manager.h>
@@ -209,11 +208,6 @@ static bool DeploySchemas(Deployer* deployer,
       LOG(ERROR) << "invalid compiled schema '" << schema_id << "' at "
                  << compiled;
       continue;
-    }
-    if (!PrismConfig::ValidateReferences(&config)) {
-      LOG(ERROR) << "schema '" << schema_id
-                 << "': invalid prism or input_types configuration.";
-      return false;
     }
     if (!plan.Collect(schema_id, &config, compiled)) {
       LOG(ERROR) << "schema '" << schema_id << "': build planning failed.";

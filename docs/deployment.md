@@ -25,9 +25,21 @@ function. A deployment-capable initializer must not rely on runtime gears.
 
 ## Resource compilation
 
-Declare resources under `build/corrector` in a schema and implement
-`BuildCompiler::Collect`. There is one compiler instance per section for
-the whole batch. Copy any configuration needed by a compile unit; the
+Declare named resources in a schema and implement `BuildCompiler::Collect`:
+
+```yaml
+build:
+  $example_pinyin:
+    type: dictionary
+  $example_corrector:
+    type: corrector
+    dictionary: $example_pinyin
+```
+
+Use `ReadBuildResources` from `rime/config/resource_config.h` to enumerate
+declarations and collect those matching the registered type. Use
+`ResolveResourceReference` for explicit resource references.
+There is one compiler instance per type for the whole batch. Copy any configuration needed by a compile unit; the
 request is only valid during Collect.
 
 Register each unit with a unique ID, estimated peak memory, outputs and

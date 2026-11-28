@@ -71,16 +71,16 @@ class RimePacksTest : public ::testing::Test {
 
   void WriteSchema(bool packs = true) {
     std::ofstream file("packs_test.schema.yaml");
-    file << "build:\n  dictionaries:\n    packs_test:\n";
+    file << "build:\n  $packs_test:\n    type: dictionary\n";
     if (packs)
-      file << "      packs: [packs_test.pack]\n";
-    file << R"YAML(      algebra:
-        pinyin: ['xform/[0-9]$//']
-        zrm:
-          - xform/[0-9]$//
-          - xform/^hao$/hk/
-          - xform/^de$/dd/
-          - xform/^xcode$/zz/
+      file << "    packs: [packs_test.pack]\n";
+    file << R"YAML(    prism:
+      $pinyin: ['xform/[0-9]$//']
+      $zrm:
+        - xform/[0-9]$//
+        - xform/^hao$/hk/
+        - xform/^de$/dd/
+        - xform/^xcode$/zz/
 translator:
   dictionary: packs_test
   prism: pinyin
@@ -421,10 +421,10 @@ TEST_F(RimePacksTest,
   std::ifstream source("packs_test.schema.yaml");
   string text((std::istreambuf_iterator<char>(source)), {});
   source.close();
-  text.insert(text.find("translator:"), R"YAML(  auxiliary:
-    dictionary: packs_test_aux
-    algebra:
-      packs_test_aux: ['aux|^([a-z])[a-z]$|$1|']
+  text.insert(text.find("translator:"), R"YAML(  $packs_test_aux:
+    type: auxiliary
+    aux:
+      $packs_test_aux: ['aux|^([a-z])[a-z]$|$1|']
 )YAML");
   std::ofstream("packs_test.schema.yaml") << text;
   ASSERT_TRUE(Compile());
@@ -466,7 +466,7 @@ TEST_F(RimePacksTest, AlgebraEditsRebuildOnlyTheSelectedPrism) {
     outputs[suffix] = Mark(suffix);
   Config schema;
   ASSERT_TRUE(schema.LoadFromFile(path{"packs_test.schema.yaml"}));
-  auto algebra = schema.GetList("build/dictionaries/packs_test/algebra/zrm");
+  auto algebra = schema.GetList("build/$packs_test/prism/$zrm");
   ASSERT_TRUE(algebra);
   algebra->Append(New<ConfigValue>("xform/^dd$/ds/"));
   ASSERT_TRUE(schema.SaveToFile(path{"packs_test.schema.yaml"}));

@@ -1,18 +1,22 @@
-# 合并 fuzzy_types 到方案根节点；将 fuzzy_rules 通过 __include 或 __patch
+# 合并 runtime_settings 到方案根节点，并在词典及翻译器中引用 fuzzy: ${fuzzy_types}；将 fuzzy_rules 通过 __include 或 __patch
 # 加入拼写转写链，在去声调及双拼/九键编码变换前执行。
 # 示例同时匹配带声调和不带声调的拼音，韵母规则只匹配音节末尾。
-fuzzy_types:
-  - {id: z_zh, label: z / zh}
-  - {id: c_ch, label: c / ch}
-  - {id: s_sh, label: s / sh}
-  - {id: n_l, label: n / l}
-  - {id: f_h, label: f / h}
-  - {id: r_y, label: r / y}
-  - {id: r_l, label: r / l}
-  - {id: g_k, label: g / k}
-  - {id: an_ang, label: an / ang}
-  - {id: en_eng, label: en / eng}
-  - {id: in_ing, label: in / ing}
+runtime_settings:
+  fuzzy_types:
+    mode: multiple
+    default: []
+    values:
+      z_zh: "z / zh"
+      c_ch: "c / ch"
+      s_sh: "s / sh"
+      n_l: "n / l"
+      f_h: "f / h"
+      r_y: "r / y"
+      r_l: "r / l"
+      g_k: "g / k"
+      an_ang: "an / ang"
+      en_eng: "en / eng"
+      in_ing: "in / ing"
 
 fuzzy_rules:
   - fuzzy/^zh/z/z_zh

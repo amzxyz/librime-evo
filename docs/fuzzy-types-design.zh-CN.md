@@ -18,14 +18,28 @@
 ## 方案声明
 
 ```yaml
-fuzzy_types:
-  - {id: z_zh, label: z / zh}
-  - {id: an_ang, label: an / ang}
+runtime_settings:
+  fuzzy_types:
+    mode: multiple
+    default: []
+    values:
+      z_zh: "z / zh"
+      an_ang: "an / ang"
+build:
+  $example:
+    type: dictionary
+    fuzzy: ${fuzzy_types}
+    prism:
+      - fuzzy/^zh/z/z_zh
+      - fuzzy/^z(?!h)/zh/z_zh
+translator:
+  dictionary: $example
+  fuzzy: ${fuzzy_types}
 ```
 
 最多 16 组；ID 唯一，规则引用的组必须已声明。label 只用于显示。具体规则由各方案自行声明，可参考 [拼音示例](fuzzy-pinyin.example.yaml)。
 
-`input_types`、`aux_types` 为互斥单选，`fuzzy_types` 为独立多选，默认全部关闭。普通 `switches` 的配置形式不变。自定义布尔、单选、多选可使用 `runtime_settings`；统一 API 参见 [前端接口](frontend-api.zh-CN.md)。
+变量名由方案自由选择；本例使用 `fuzzy_types` 作为多选变量，默认全部关闭。普通 `switches` 的配置形式不变。自定义布尔、单选、多选可使用 `runtime_settings`；统一 API 参见 [前端接口](frontend-api.zh-CN.md)。
 
 ## Prism 存储
 

@@ -15,6 +15,7 @@
 #include <boost/algorithm/string.hpp>
 #include <rime/resource.h>
 #include <rime/schema.h>
+#include <rime/config/resource_config.h>
 #include <rime/service.h>
 #include <rime/ticket.h>
 #include <rime/dict/db_pool_impl.h>
@@ -339,6 +340,8 @@ ReverseLookupDictionary* ReverseLookupDictionaryComponent::Create(
     // missing!
     return NULL;
   }
+  if (!ResolveResourceReference(config, "dictionary", &dict_name))
+    return nullptr;
   return Create(dict_name);
 }
 

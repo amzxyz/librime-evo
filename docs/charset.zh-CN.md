@@ -1,19 +1,19 @@
 # 原生字符集准入
 
-通过 `build/rewrites` 编译普通 UTF-8 TSV 键值数据（单字、TAB、字符集属性字符串），
+通过 `type: rewrite` 编译普通 UTF-8 TSV 键值数据（单字、TAB、字符集属性字符串），
 以命名空间配置字符集策略。无需注册字符集滤镜。
 
 ```yaml
 build:
-  rewrites:
-    charset:
-      files: [data/charset.txt]
+  $charset:
+    type: rewrite
+    files: [data/charset.txt]
 
 translator:
   charset: charset
 
 charset:
-  data: charset
+  data: $charset
   exclude_tags: [reverse_lookup]
   rules:
     - option: charset_filter

@@ -1089,21 +1089,14 @@ static void RimeFreeCodeChoices(RimeCodeChoice* choices, size_t count) {
   delete[] choices;
 }
 
-static bool LoadTypeGroup(const char* schema_id,
-                          const char* group,
-                          SettingGroupConfig* types) {
+static bool LoadRuntimeSetting(const char* schema_id,
+                               const char* group,
+                               SettingGroupConfig* types) {
   if (!schema_id || !group || !safe_path::ValidRelativeName(schema_id) ||
       !safe_path::ValidRelativeName(group))
     return false;
   Schema schema(schema_id);
-  map<string, SettingGroupConfig> groups;
-  if (!SettingGroupConfig::LoadGroups(schema.config(), &groups))
-    return false;
-  auto found = groups.find(group);
-  if (found == groups.end())
-    return false;
-  *types = std::move(found->second);
-  return true;
+  return types->Load(schema.config(), group);
 }
 
 static vector<string> ResolveSettingValues(RimeSessionId session_id,
@@ -1136,7 +1129,8 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
                               char* option,
                               size_t buffer_size) {
   SettingGroupConfig types;
-  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types) ||
+  if (!option || !buffer_size ||
+      !LoadRuntimeSetting(schema_id, group, &types) ||
       types.mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
@@ -1158,7 +1152,7 @@ static Bool RimeGetTypeOptions(RimeSessionId session_id,
   *options = nullptr;
   *count = 0;
   SettingGroupConfig types;
-  if (!LoadTypeGroup(schema_id, group, &types) ||
+  if (!LoadRuntimeSetting(schema_id, group, &types) ||
       types.mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
@@ -1166,8 +1160,8 @@ static Bool RimeGetTypeOptions(RimeSessionId session_id,
   auto* items = new RimeTypeOption[types.options.size()]{};
   for (size_t i = 0; i < types.options.size(); ++i) {
     const auto& item = types.options[i];
-    items[i] = {dup_string(item.option), dup_string(item.label),
-                Bool(item.option == selected)};
+    items[i] = {dup_string(item.value), dup_string(item.label),
+                Bool(item.value == selected)};
   }
   *options = items;
   *count = types.options.size();
@@ -1190,8 +1184,8 @@ static Bool RimeSelectSetting(RimeSessionId session_id,
                               const char* const* values,
                               size_t count) {
   SettingGroupConfig setting;
-  if ((count && !values) || !LoadTypeGroup(schema_id, group, &setting) ||
-      count > setting.options.size())
+  if ((count && !values) || !LoadRuntimeSetting(schema_id, group, &setting) ||
+      setting.fixed || count > setting.options.size())
     return False;
   vector<string> selected;
   for (size_t i = 0; i < count; ++i) {
@@ -1216,10 +1210,28 @@ static Bool RimeSelectTypeOption(RimeSessionId session_id,
                                  const char* group,
                                  const char* option) {
   SettingGroupConfig setting;
-  if (!option || !LoadTypeGroup(schema_id, group, &setting) ||
+  if (!option || !LoadRuntimeSetting(schema_id, group, &setting) ||
       setting.mode != SettingGroupConfig::kSingle)
     return False;
   return RimeSelectSetting(session_id, schema_id, group, &option, 1);
+}
+
+static Bool RimeGetSettingInfo(const char* schema_id,
+                               const char* group,
+                               char* label,
+                               size_t label_size,
+                               Bool* fixed) {
+  SettingGroupConfig setting;
+  if (!fixed || !label || !label_size ||
+      !LoadRuntimeSetting(schema_id, group, &setting))
+    return False;
+  const string title = setting.label.empty() ? group : setting.label;
+  if (title.size() >= label_size)
+    return False;
+  title.copy(label, title.size());
+  label[title.size()] = '\0';
+  *fixed = setting.fixed ? True : False;
+  return True;
 }
 
 static Bool RimeGetSetting(RimeSessionId session_id,
@@ -1233,7 +1245,7 @@ static Bool RimeGetSetting(RimeSessionId session_id,
   *values = nullptr;
   *count = 0;
   SettingGroupConfig setting;
-  if (!LoadTypeGroup(schema_id, group, &setting))
+  if (!LoadRuntimeSetting(schema_id, group, &setting))
     return False;
   const auto selected =
       ResolveSettingValues(session_id, schema_id, group, setting);
@@ -1241,8 +1253,8 @@ static Bool RimeGetSetting(RimeSessionId session_id,
   auto* items = new RimeSettingValue[setting.options.size()]{};
   for (size_t i = 0; i < setting.options.size(); ++i) {
     const auto& item = setting.options[i];
-    items[i] = {dup_string(item.option), dup_string(item.label),
-                Bool(std::find(selected.begin(), selected.end(), item.option) !=
+    items[i] = {dup_string(item.value), dup_string(item.label),
+                Bool(std::find(selected.begin(), selected.end(), item.value) !=
                      selected.end())};
   }
   *values = items;
@@ -1701,6 +1713,7 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.get_setting = &RimeGetSetting;
     s_api.free_setting_values = &RimeFreeSettingValues;
     s_api.select_setting = &RimeSelectSetting;
+    s_api.get_setting_info = &RimeGetSettingInfo;
   }
   return &s_api;
 }

@@ -52,9 +52,12 @@ class DictCompiler {
   RIME_DLL static bool CompileDictionary(const DictionarySpec& definition,
                                          const path& schema_file,
                                          int options = 0);
-  RIME_DLL static bool ReadAuxiliarySpecs(
-      Config* schema,
-      vector<pair<string, an<ConfigList>>>* groups);
+  struct AuxiliarySpec {
+    string source;
+    vector<pair<string, an<ConfigList>>> groups;
+  };
+  RIME_DLL static bool ReadAuxiliaryBuildSpecs(Config* schema,
+                                               vector<AuxiliarySpec>* sources);
   RIME_DLL static bool CompileAuxiliary(const path& schema_file,
                                         bool rebuild = false);
   RIME_DLL static bool CompileAuxiliary(

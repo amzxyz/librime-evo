@@ -17,6 +17,7 @@
 
 #include <rime/algo/algebra.h>
 #include <rime/config.h>
+#include <rime/config/resource_config.h>
 #include <rime/deployer.h>
 #include <rime/lever/rewrite_preset.h>
 #include <rime/path_resolver.h>
@@ -104,12 +105,12 @@ bool ResolveRewriteSources(Config* config,
   bindings->reserve(section_names.size());
   std::unique_ptr<RewritePresetCatalog> presets;
   for (const auto& name : section_names) {
+    const string section_name = "build/$" + name;
     if (!safe_path::ValidRelativeName(name, false) ||
-        !config->GetMap("build/rewrites/" + name)) {
+        !config->GetMap(section_name)) {
       LOG(ERROR) << "invalid rewrite resource '" << name << "'.";
       return false;
     }
-    const string section_name = "build/rewrites/" + name;
     const bool has_files =
         static_cast<bool>(config->GetItem(section_name + "/files"));
     const bool has_preset =
@@ -479,16 +480,13 @@ bool RewriteCompiler::ReadSpecs(Config* config, vector<Spec>* specs) {
   if (!config || !deployer_ || !specs)
     return false;
   specs->clear();
-  if (config->IsNull("build/rewrites"))
-    return true;
-  auto rewrites = config->GetMap("build/rewrites");
-  if (!rewrites) {
-    LOG(ERROR) << "build/rewrites must be a map keyed by resource name.";
+  vector<BuildResource> resources;
+  if (!ReadBuildResources(config, &resources))
     return false;
-  }
   vector<string> names;
-  for (const auto& item : *rewrites)
-    names.push_back(item.first);
+  for (const auto& resource : resources)
+    if (resource.type == "rewrite")
+      names.push_back(resource.name);
   if (!ResolveRewriteSources(config, deployer_, names, specs))
     return false;
   for (auto& spec : *specs) {

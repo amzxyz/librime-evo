@@ -90,56 +90,54 @@ bool DictionaryBuildCompiler::Collect(const BuildRequest& request,
 
 bool AuxiliaryBuildCompiler::Collect(const BuildRequest& request,
                                      BuildPlan* plan) {
-  Groups groups;
-  if (!DictCompiler::ReadAuxiliarySpecs(request.config, &groups))
+  vector<DictCompiler::AuxiliarySpec> sources;
+  if (!DictCompiler::ReadAuxiliaryBuildSpecs(request.config, &sources))
     return false;
-  if (groups.empty())
-    return true;
-  string source;
-  if (!request.config->GetString("build/auxiliary/dictionary", &source) ||
-      source.empty()) {
-    LOG(ERROR) << "build/auxiliary/dictionary is required.";
-    return false;
-  }
-  if (!boost::iends_with(source, ".yaml"))
-    source += ".yaml";
-  for (const auto& group : groups) {
-    if (!safe_path::ValidRelativeName(group.first, false))
-      return false;
-    const auto existing = groups_.find(group.first);
-    if (existing != groups_.end()) {
-      const auto& build = existing->second;
-      if (build.source != source ||
-          !SamePrismAlgebra(build.algebra, group.second)) {
-        LOG(ERROR) << "conflicting auxiliary group '" << group.first
-                   << "' in schemas '" << build.schema << "' and '"
-                   << request.schema_id << "'.";
+  for (const auto& definition : sources) {
+    string source = definition.source;
+    const auto& groups = definition.groups;
+    if (!boost::iends_with(source, ".yaml"))
+      source += ".yaml";
+    for (const auto& group : groups) {
+      if (!safe_path::ValidRelativeName(group.first, false))
         return false;
+      const auto existing = groups_.find(group.first);
+      if (existing != groups_.end()) {
+        const auto& build = existing->second;
+        if (build.source != source ||
+            !SamePrismAlgebra(build.algebra, group.second)) {
+          LOG(ERROR) << "conflicting auxiliary group '" << group.first
+                     << "' in schemas '" << build.schema << "' and '"
+                     << request.schema_id << "'.";
+          return false;
+        }
+        plan->AddOwner(build.unit, request.schema_id);
+        continue;
       }
+      const string id = "auxiliary:" + group.first;
+      auto source_build = sources_.find(source);
+      if (source_build == sources_.end()) {
+        auto shared = New<Groups>();
+        const auto name = source.substr(0, source.size() - 5);
+        const auto bytes = DictCompiler::EstimateMemory(name, true);
+        const bool rebuild = request.rebuild;
+        CompileUnit unit(id, bytes, [source, shared, rebuild]() {
+          return DictCompiler::CompileAuxiliary(source, *shared, rebuild);
+        });
+        const size_t index = plan->AddUnit(std::move(unit), request.schema_id);
+        source_build =
+            sources_.emplace(source, SourceBuild{shared, index}).first;
+      }
+      auto& build = source_build->second;
+      if (!plan->AddAlias(id, build.unit))
+        return false;
+      build.groups->push_back(group);
+      plan->unit(build.unit).AddOutput(group.first + ".aux.bin");
       plan->AddOwner(build.unit, request.schema_id);
-      continue;
+      GroupBuild definition{source, request.schema_id, group.second,
+                            build.unit};
+      groups_.emplace(group.first, std::move(definition));
     }
-    const string id = "auxiliary:" + group.first;
-    auto source_build = sources_.find(source);
-    if (source_build == sources_.end()) {
-      auto shared = New<Groups>();
-      const auto name = source.substr(0, source.size() - 5);
-      const auto bytes = DictCompiler::EstimateMemory(name, true);
-      const bool rebuild = request.rebuild;
-      CompileUnit unit(id, bytes, [source, shared, rebuild]() {
-        return DictCompiler::CompileAuxiliary(source, *shared, rebuild);
-      });
-      const size_t index = plan->AddUnit(std::move(unit), request.schema_id);
-      source_build = sources_.emplace(source, SourceBuild{shared, index}).first;
-    }
-    auto& build = source_build->second;
-    if (!plan->AddAlias(id, build.unit))
-      return false;
-    build.groups->push_back(group);
-    plan->unit(build.unit).AddOutput(group.first + ".aux.bin");
-    plan->AddOwner(build.unit, request.schema_id);
-    GroupBuild definition{source, request.schema_id, group.second, build.unit};
-    groups_.emplace(group.first, std::move(definition));
   }
   return true;
 }

@@ -12,6 +12,7 @@
 #include <rime/algo/strings.h>
 #include <rime/composition.h>
 #include <rime/config.h>
+#include <rime/config/resource_config.h>
 #include <rime/context.h>
 #include <rime/engine.h>
 #include <rime/schema.h>
@@ -276,7 +277,8 @@ void Rewriter::LoadConfig() {
   }
   Config* config = engine_->schema()->config();
   string data;
-  if (config->GetString(name_space_ + "/data", &data))
+  if (config->GetString(name_space_ + "/data", &data) &&
+      ResolveResourceReference(config, "rewrite", &data))
     resource_ = RewriteResource::Require(data);
   if (!resource_)
     LOG(WARNING) << "rewriter@" << name_space_

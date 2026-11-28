@@ -4,11 +4,12 @@ EVO 支持插件参与统一的资源编译和部署生命周期，无需修改�
 
 ## 1. 注册编译器
 
-插件实现 `BuildCompiler`，在模块初始化时注册对应的 `build/<名称>`。例如纠错插件：
+插件实现 `BuildCompiler`，在模块初始化时注册对应的 `build/<type>`。例如纠错插件：
 
 ```cpp
 #include <rime_api.h>
 #include <rime/config.h>
+#include <rime/config/resource_config.h>
 #include <rime/deployer.h>
 #include <rime/lever/build_compiler.h>
 #include <rime/registry.h>
@@ -23,22 +24,32 @@ class CorrectorCompiler : public BuildCompiler {
   explicit CorrectorCompiler(Deployer* deployer) : deployer_(deployer) {}
 
   bool Collect(const BuildRequest& request, BuildPlan* plan) override {
-    string dictionary;
-    if (!request.config->GetString("build/corrector/dictionary", &dictionary))
+    vector<BuildResource> resources;
+    if (!ReadBuildResources(request.config, &resources))
       return false;
+    for (const auto& resource : resources) {
+      if (resource.type != "corrector")
+        continue;
+      auto value = resource.definition->GetValue("dictionary");
+      if (!value)
+        return false;
+      string dictionary = value->str();
+      if (!ResolveResourceReference(request.config, "dictionary", &dictionary))
+        return false;
 
-    const string id = "corrector:" + dictionary;
-    const string output = dictionary + ".corrector.bin";
-    const path table = deployer_->staging_dir / (dictionary + ".table.bin");
-    const path target = deployer_->staging_dir / output;
+      const string id = "corrector:" + resource.name;
+      const string output = resource.name + ".corrector.bin";
+      const path table = deployer_->staging_dir / (dictionary + ".table.bin");
+      const path target = deployer_->staging_dir / output;
 
-    // 任务 ID、预计峰值内存（字节）、编译函数。
-    CompileUnit unit(id, 16 * 1024 * 1024, [table, target]() {
-      return BuildCorrector(table, target);
-    });
-    unit.AddOutput(output);
-    plan->AddUnit(std::move(unit), request.schema_id);
-    plan->AddDependency("dictionary:" + dictionary, id);
+      // 任务 ID、预计峰值内存（字节）、编译函数。
+      CompileUnit unit(id, 16 * 1024 * 1024, [table, target]() {
+        return BuildCorrector(table, target);
+      });
+      unit.AddOutput(output);
+      plan->AddUnit(std::move(unit), request.schema_id);
+      plan->AddDependency("dictionary:" + dictionary, id);
+    }
     return true;
   }
 
@@ -62,11 +73,14 @@ RIME_REGISTER_DEPLOYER_MODULE(corrector)
 
 ```yaml
 build:
-  corrector:
-    dictionary: example_pinyin
+  $example_pinyin:
+    type: dictionary
+  $example_corrector:
+    type: corrector
+    dictionary: $example_pinyin
 ```
 
-部署时自动查找 `build/corrector`，收集任务并统一调度。本例依赖本次部署中的 `dictionary:example_pinyin` 任务，词库编译成功后才构建纠错资源。依赖与注册顺序无关；前置任务失败时，依赖任务自动跳过。
+部署时按 `type: corrector` 查找注册的 `build/corrector`，收集任务并统一调度。本例依赖本次部署中的 `dictionary:example_pinyin` 任务，词库编译成功后才构建纠错资源。依赖与注册顺序无关；前置任务失败时，依赖任务自动跳过。
 
 ## 3. 编译接口
 
@@ -117,3 +131,66 @@ auto after = deployer.after_deploy().connect(
 维护线程结束后，前端可调用 `get_deployment_result` 读取本轮方案部署结果，并使用 `free_deployment_result` 释放。未执行方案部署、选择阶段失败或结果尚未就绪时返回 false；方案编译成功并不等同于运行时资源完整。只有当前方案明确成功、其他方案明确失败且没有独立维护任务失败（`deployment_has_other_failure`）时，前端才可将整体失败降级为部分失败提示。
 
 `get_initial_schema` 使用 Switcher 的真实初始方案选择规则，不需要创建会话。空闲时调用 `prewarm_schema(nullptr, &paths)`，通过原生资源工厂准备该方案实际使用的只读词典、Prism、辅助码、Rewrite 和语言模型。返回的是实际映射文件的绝对路径，可交给有内存预算、可取消的后台 I/O 预读；使用 `free_string_list` 释放路径。预热是可选优化，不启动部署、不创建会话、不打开 UserDB，不承担运行时完整性认证。只保留一个预热方案的资源，跨输入会话复用，直至 `release_prewarm`、下次部署前或 finalize。调用预热与会话操作应在同一引擎所有者线程串行完成；活跃会话时不重复创建预热对象。
+
+## 具名编译资源与运行时变量
+
+方案可用 `$name` 声明、引用编译资源。部署在处理完原有 patch 后校验资源类型和作用域，再链接到编译计划。资源名不含美元符号，原有二进制格式不变。
+
+```yaml
+build:
+  $example:
+    type: dictionary
+    prism:
+      $full:
+        - derive/^zh/z/
+      $double:
+        __patch: example_algebra:/双拼
+  $aux_code:
+    type: auxiliary
+    aux:
+      $aux_example:
+        __patch: example_algebra:/辅助码
+  $emoji:
+    type: rewrite
+    files:
+      - data/emoji.txt
+
+runtime_settings:
+  input_types:
+    label: 输入方式
+    type: prism
+    mode: single
+    default: $full
+    values:
+      $full: 全拼
+      $double: 双拼
+  aux_types:
+    label: 辅助码
+    type: auxiliary
+    mode: single
+    default: $aux_example
+    values:
+      $aux_example: 辅助码
+
+translator:
+  dictionary: $example
+  prism: ${input_types}
+  aux: ${aux_types}
+
+emoji:
+  data: $emoji
+  option: emoji
+```
+
+`$name` 是静态资源符号；`${name}` 是完整值的运行时变量引用，不执行字符串插值。Prism 在所属词典中解析；辅助码与 Rewrite 在方案内解析。词典的 `prism` 可直接写规则列表，也可写具名规则组；辅助码的 `aux` 声明具名组。编译时构建全部资源，不依赖用户当前选择。插件按 `build/<type>` 注册编译器，使用 ReadBuildResources 读取资源声明，不再按旧分类路径读取。
+
+```yaml
+patch:
+  runtime_settings/input_types/fixed: $double
+```
+
+变量支持 boolean、single、multiple。值域支持映射及列表；映射按键排序，列表保留声明顺序。有效值优先级为 fixed、user.yaml 中合法的用户选择、default。fixed 禁止运行时修改，但不删除已经保存的用户选择。接口 get_settings/get_setting/select_setting 用于枚举和修改变量；get_setting_info 返回显示名称及 fixed 状态。普通 switches 和 option 不受影响。
+
+模糊音变量是普通多选值域。在词典资源和使用它的翻译器中均使用 `fuzzy: ${fuzzy_types}`，编译时检查规则中的条件 ID，运行时应用选择掩码。直接辅助模式可通过 `direct_aux_mode: ${direct_aux_mode}` 引用单选变量，允许 off、char、word 三个值。未引用变量的普通静态设置保持原行为。
+
+用户词学习模式可通过 `user_dict_mode: ${learning}` 引用值域为 auto、manual、off 的单选变量。该设置仅允许在未组字时切换；切换前结束待提交的学习事务，再重建相关翻译器，不重新部署。
