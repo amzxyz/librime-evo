@@ -210,6 +210,9 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
   }
   if (!dictionary->loaded() && !dictionary->Load())
     return false;
+  static const vector<string> no_fuzzy_types;
+  dictionary->SetFuzzyTypes(context ? context->setting_values("fuzzy_types")
+                                    : no_fuzzy_types);
   if (active_prism_ != dictionary->prism()) {
     if (user_dictionary)
       user_dictionary->Attach(dictionary->primary_table(), dictionary->prism());

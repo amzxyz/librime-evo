@@ -193,6 +193,7 @@ an<Translation> ReverseLookupTranslator::Query(const string& input,
       SyllableGraph graph;
       Syllabifier syllabifier(options_->delimiters(), true,
                               options_->strict_spelling());
+      syllabifier.SetFuzzyMask(dict_->fuzzy_mask());
       size_t consumed =
           syllabifier.BuildSyllableGraph(code, *dict_->prism(), &graph);
       if (consumed == code.length()) {

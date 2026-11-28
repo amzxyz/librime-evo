@@ -12,7 +12,7 @@
 | `translator/dictionary`、`translator/prism`、`prisms`、`build/dictionaries` | 内核资源工厂解释；前端不推导编译文件名 |
 | `grammar/language` | 模型插件解析；预热返回实际映射文件路径 |
 | `engine/processors`、`super_sequence` | 候选编辑通过 edit_candidate 接口判断可用性并调用，不解析 Lua 快捷键。不是通用组件状态查询 |
-| `input_types`、`aux_types`、`runtime_settings` | 使用 get_settings / get_setting / select_setting，无需解析配置组 |
+| `input_types`、`aux_types`、`fuzzy_types`、`runtime_settings` | 使用 get_settings / get_setting / select_setting，无需解析配置组 |
 
 配置编辑器读写 YAML 不属于运行时语义推导。
 
@@ -70,3 +70,5 @@ runtime_settings:
 ```
 
 `get_settings` 枚举组 ID，`get_setting` 返回模式及所有值（含 label、selected），`select_setting` 校验并整组替换选中值列表。boolean 使用 true/false 字符串值传递，持久化为 YAML bool；single 保存单个 ID；multiple 保存列表，空列表是有效选择。内核按 schema 保存至 var/type_groups/<schema>/<group>，不会修改方案配置。自定义组由相应组件读取 Context::setting_values/setting_selected；声明本身不会自动改变任意组件行为。切换后当前会话刷新候选，通知 setting/group。现有单选 C ABI 槽位委托至新接口，set_option 不再切换类型组。普通 `switches` 不属于该 API。`get_option` / `set_option` 保留原有布尔运行时接口与通知机制；Evo 的主动选择记忆继续由 `select_switch` 和方案 `reset` 定义，不依赖 default.yaml 白名单。
+
+`fuzzy_types` 是内核保留的多选组，默认空列表；通过同一设置 API 枚举、替换、保存和恢复。组内值为模糊组 ID，前端不需要识别 Prism 位编号。

@@ -14,7 +14,7 @@ translator:
 
 charset:
   data: charset
-  exclude_tags: [reverse_lookup, wanxiang_reverse]
+  exclude_tags: [reverse_lookup]
   rules:
     - option: charset_filter
       base: a

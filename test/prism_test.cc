@@ -169,7 +169,7 @@ TEST_F(RimePrismTest, CodeChoicesUseCompiledSyllableSubsets) {
   ASSERT_TRUE(prism.GetValue("zuo", &id));
   EXPECT_TRUE(prism.QueryCodeChoices(id).empty());
 
-  // Legacy format is readable but must be rebuilt by the compiler.
+  // Older flags layouts must be rebuilt by the compiler.
   prism.Close();
   {
     std::fstream file(prism.file_path().c_str(),
@@ -177,10 +177,7 @@ TEST_F(RimePrismTest, CodeChoicesUseCompiledSyllableSubsets) {
     ASSERT_TRUE(file);
     file.write("Rime::Prism/6.0", 15);
   }
-  ASSERT_TRUE(prism.Load());
-  EXPECT_FALSE(prism.has_code_choice_format());
-  EXPECT_FALSE(prism.HasCodeChoices());
-  EXPECT_TRUE(prism.QueryCodeChoices("986").empty());
+  EXPECT_FALSE(prism.Load());
   prism.Remove();
 }
 
@@ -200,5 +197,56 @@ TEST_F(RimePrismTest, NoCodeChoicesForIdentityOrEqualSets) {
   EXPECT_FALSE(prism.HasCodeChoices());
   EXPECT_TRUE(prism.QueryCodeChoices("23").empty());
   EXPECT_TRUE(prism.QueryCodeChoices("ab").empty());
+  prism.Remove();
+}
+
+TEST_F(RimePrismTest, ConditionalMappingsRoundTripWithoutChangingCodeChoices) {
+  Prism prism(path{"fuzzy_choices_test.prism.bin"});
+  prism.Remove();
+  const Syllabary syllables{"a", "b", "c", "d"};
+  Script script;
+  script["23"] = {Spelling("a"), Spelling("b"), Spelling("c"), Spelling("d")};
+  script["23"][1].properties.fuzzy_mask = 1;
+  script["23"][2].properties.fuzzy_mask = 2;
+  script["23"][3].properties.fuzzy_mask = 3;
+  Spelling alternative("b");
+  alternative.properties.fuzzy_mask = 2;
+  script["23"].push_back(alternative);
+  script["24"] = {Spelling("a"), Spelling("b")};
+  script["A"] = {Spelling("a")};
+  script["B"] = {Spelling("b")};
+  script["C"] = {Spelling("c")};
+  script["D"] = {Spelling("d")};
+  script["only"] = {Spelling("b")};
+  script["only"].front().properties.fuzzy_mask = 1;
+  ASSERT_TRUE(prism.Build(syllables, &script, 0, 0, false, {"z_zh", "an_ang"}));
+  ASSERT_TRUE(prism.Save());
+  ASSERT_TRUE(prism.Load());
+  EXPECT_EQ(2u, prism.FuzzyMask({"an_ang"}));
+  EXPECT_EQ(3u, prism.FuzzyMask({"an_ang", "z_zh"}));
+  int id = -1;
+  ASSERT_TRUE(prism.GetValue("23", &id));
+  auto read = [&](uint32_t mask) {
+    set<string> result;
+    for (auto a = prism.QuerySpelling(id, mask); !a.exhausted(); a.Next()) {
+      EXPECT_EQ(kNormalSpelling, a.properties().type);
+      EXPECT_DOUBLE_EQ(0.0, a.properties().credibility);
+      EXPECT_TRUE(result.insert(prism.GetSyllableById(a.syllable_id())).second);
+    }
+    return result;
+  };
+  EXPECT_EQ((set<string>{"a"}), read(0));
+  EXPECT_EQ((set<string>{"a", "b"}), read(1));
+  EXPECT_EQ((set<string>{"a", "b", "c"}), read(2));
+  EXPECT_EQ((set<string>{"a", "b", "c", "d"}), read(3));
+  EXPECT_TRUE(prism.QueryCodeChoices("23").empty());
+  // Equal native sets use their first key ("23" rather than "A").
+  EXPECT_EQ((vector<string>{"23", "B"}),
+            ReadChoices(prism.QueryCodeChoices("24")));
+  vector<Prism::Match> matches;
+  prism.ExpandSearch("on", &matches, 1, 0, kNormalSpelling);
+  EXPECT_TRUE(matches.empty());
+  prism.ExpandSearch("on", &matches, 1, 1, kNormalSpelling);
+  EXPECT_EQ(1u, matches.size());
   prism.Remove();
 }

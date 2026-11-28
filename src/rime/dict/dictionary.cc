@@ -695,6 +695,14 @@ an<DictEntryCollector> Dictionary::Lookup(const SyllableGraph& syllable_graph,
   return collector->empty() ? nullptr : collector;
 }
 
+void Dictionary::SetFuzzyTypes(const vector<string>& groups) {
+  if (fuzzy_prism_ == prism_.get() && fuzzy_types_ == groups)
+    return;
+  fuzzy_prism_ = prism_.get();
+  fuzzy_types_ = groups;
+  fuzzy_mask_ = prism_ ? prism_->FuzzyMask(groups) : 0;
+}
+
 size_t Dictionary::LookupWords(DictEntryIterator* result,
                                const string& str_code,
                                bool predictive,
@@ -705,7 +713,8 @@ size_t Dictionary::LookupWords(DictEntryIterator* result,
     return 0;
   vector<Prism::Match> keys;
   if (predictive) {
-    prism_->ExpandSearch(str_code, &keys, expand_search_limit);
+    prism_->ExpandSearch(str_code, &keys, expand_search_limit, fuzzy_mask_,
+                         kNormalSpelling);
   } else {
     Prism::Match match{0, 0};
     if (prism_->GetValue(str_code, &match.value)) {
@@ -715,7 +724,7 @@ size_t Dictionary::LookupWords(DictEntryIterator* result,
   DLOG(INFO) << "found " << keys.size() << " matching keys thru the prism.";
   size_t code_length(str_code.length());
   for (auto& match : keys) {
-    SpellingAccessor accessor(prism_->QuerySpelling(match.value));
+    SpellingAccessor accessor(prism_->QuerySpelling(match.value, fuzzy_mask_));
     while (!accessor.exhausted()) {
       SyllableId syllable_id = accessor.syllable_id();
       SpellingType type = accessor.properties().type;

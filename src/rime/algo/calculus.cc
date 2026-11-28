@@ -4,6 +4,7 @@
 //
 // 2012-01-17 GONG Chen <chen.sst@gmail.com>
 //
+#include <algorithm>
 #include <boost/algorithm/string.hpp>
 #include <utf8.h>
 #include <rime/algo/calculus.h>
@@ -11,16 +12,17 @@
 
 namespace rime {
 
-const double kAbbreviationPenalty = -0.6931471805599453;   // log(0.5)
-const double kFuzzySpellingPenalty = -0.6931471805599453;  // log(0.5)
-const double kCorrectionPenalty = -4.605170185988091;      // log(0.01)
+const double kAbbreviationPenalty = -0.6931471805599453;  // log(0.5)
+const double kWeakSpellingPenalty = -0.6931471805599453;  // log(0.5)
+const double kCorrectionPenalty = -4.605170185988091;     // log(0.01)
 
 Calculus::Calculus() {
   Register("xlit", &Transliteration::Parse);
   Register("xform", &Transformation::Parse);
   Register("erase", &Erasion::Parse);
   Register("derive", &Derivation::Parse);
-  Register("fuzz", &Fuzzing::Parse);
+  Register("weak", &WeakDerivation::Parse);
+  Register("fuzzy", &FuzzyDerivation::Parse);
   Register("abbrev", &Abbreviation::Parse);
   Register("reorder", &Reorder::Parse);
   Register("aux", &Auxiliary::Parse);
@@ -42,8 +44,19 @@ Calculation* Calculus::Parse(const string& definition) {
   auto it = factories_.find(args[0]);
   if (it == factories_.end())
     return NULL;
-  Calculation* result = (*it->second)(args);
-  return result;
+  the<Calculation> result((*it->second)(args));
+  if (auto* fuzzy = dynamic_cast<FuzzyDerivation*>(result.get())) {
+    auto found =
+        std::find(fuzzy_groups_.begin(), fuzzy_groups_.end(), fuzzy->group());
+    size_t index = found - fuzzy_groups_.begin();
+    if (found == fuzzy_groups_.end()) {
+      if (index >= kMaxFuzzyGroups)
+        return nullptr;
+      fuzzy_groups_.push_back(fuzzy->group());
+    }
+    fuzzy->set_mask(1u << index);
+  }
+  return result.release();
 }
 
 // Transliteration
@@ -181,14 +194,16 @@ Calculation* Derivation::Parse(const vector<string>& args) {
       x->replacement_.assign(right);
       return x.release();
     }
-    // 模糊音
-    if (tag == "fuzz") {
-      the<Fuzzing> x(new Fuzzing);
+    // 弱拼寫
+    if (tag == "weak") {
+      the<WeakDerivation> x(new WeakDerivation);
       x->pattern_.assign(left);
       x->replacement_.assign(right);
       return x.release();
     }
-    // tag 無法識別, 作爲普通 derive 處理
+    // A trailing separator is legal; unknown tags are not ordinary derives.
+    if (!tag.empty())
+      return nullptr;
   }
 
   the<Derivation> x(new Derivation);
@@ -197,28 +212,49 @@ Calculation* Derivation::Parse(const vector<string>& args) {
   return x.release();
 }
 
-// Fuzzing
+// Weak derivation
 
-Calculation* Fuzzing::Parse(const vector<string>& args) {
+Calculation* WeakDerivation::Parse(const vector<string>& args) {
   if (args.size() < 3)
     return NULL;
   const string& left(args[1]);
   const string& right(args[2]);
   if (left.empty())
     return NULL;
-  the<Fuzzing> x(new Fuzzing);
+  the<WeakDerivation> x(new WeakDerivation);
   x->pattern_.assign(left);
   x->replacement_.assign(right);
   return x.release();
 }
 
-bool Fuzzing::Apply(Spelling* spelling) {
+bool WeakDerivation::Apply(Spelling* spelling) {
   bool result = Transformation::Apply(spelling);
   if (result) {
-    spelling->properties.type = kFuzzySpelling;
-    spelling->properties.credibility += kFuzzySpellingPenalty;
+    spelling->properties.type = kWeakSpelling;
+    spelling->properties.credibility += kWeakSpellingPenalty;
   }
   return result;
+}
+
+// Conditional fuzzy derivation
+
+Calculation* FuzzyDerivation::Parse(const vector<string>& args) {
+  if (args.size() < 4 || args[1].empty() || args[3].empty() ||
+      (args.size() > 4 && (args.size() != 5 || !args[4].empty())) ||
+      args[3].front() == '_' || args[3].find('/') != string::npos)
+    return nullptr;
+  the<FuzzyDerivation> rule(new FuzzyDerivation);
+  rule->pattern_.assign(args[1]);
+  rule->replacement_.assign(args[2]);
+  rule->group_ = args[3];
+  return rule.release();
+}
+
+bool FuzzyDerivation::Apply(Spelling* spelling) {
+  if (!mask_ || !Transformation::Apply(spelling))
+    return false;
+  spelling->properties.fuzzy_mask |= mask_;
+  return true;
 }
 
 // Abbreviation

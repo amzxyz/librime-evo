@@ -63,10 +63,10 @@ RIME_REGISTER_DEPLOYER_MODULE(corrector)
 ```yaml
 build:
   corrector:
-    dictionary: wanxiang
+    dictionary: example_pinyin
 ```
 
-部署时自动查找 `build/corrector`，收集任务并统一调度。本例依赖本次部署中的 `dictionary:wanxiang` 任务，词库编译成功后才构建纠错资源。依赖与注册顺序无关；前置任务失败时，依赖任务自动跳过。
+部署时自动查找 `build/corrector`，收集任务并统一调度。本例依赖本次部署中的 `dictionary:example_pinyin` 任务，词库编译成功后才构建纠错资源。依赖与注册顺序无关；前置任务失败时，依赖任务自动跳过。
 
 ## 3. 编译接口
 

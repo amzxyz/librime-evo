@@ -16,6 +16,7 @@
 #include <rime/algo/strings.h>
 #include <utf8.h>
 #include <rime/algo/algebra.h>
+#include <rime/algo/calculus.h>
 #include <rime/algo/utilities.h>
 #include <rime/dict/auxiliary_db.h>
 #include <rime/dict/compact_entries.h>
@@ -336,6 +337,9 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
   if (!schema || !definitions || !PrismConfig::ValidateReferences(schema))
     return false;
   definitions->clear();
+  SettingGroupConfig fuzzy;
+  if (!fuzzy.Load(schema, "fuzzy_types"))
+    return false;
   if (schema->IsNull("build/dictionaries"))
     return true;
   auto dictionaries = schema->GetMap("build/dictionaries");
@@ -411,6 +415,30 @@ bool DictCompiler::ReadDictionarySpecs(Config* schema,
       return false;
     }
     for (const auto& prism : definition.prisms) {
+      if (prism.second) {
+        Calculus calculus;
+        for (const auto& item : *prism.second) {
+          auto value = As<ConfigValue>(item);
+          if (!value)
+            return false;
+          const auto& rule = value->str();
+          if (rule.size() > 5 && rule.compare(0, 5, "fuzzy") == 0 &&
+              !std::isalpha(static_cast<unsigned char>(rule[5]))) {
+            the<Calculation> calculation;
+            try {
+              calculation.reset(calculus.Parse(rule));
+            } catch (const boost::regex_error&) {
+              return false;
+            }
+            auto* derivation =
+                dynamic_cast<FuzzyDerivation*>(calculation.get());
+            if (!derivation || !fuzzy.Contains(derivation->group())) {
+              LOG(ERROR) << "undeclared or invalid fuzzy group: " << rule;
+              return false;
+            }
+          }
+        }
+      }
       if (!prism_names.insert(prism.first).second) {
         LOG(ERROR) << "duplicate prism build: " << prism.first;
         return false;
@@ -888,6 +916,7 @@ bool DictCompiler::BuildPrism(const an<ConfigList>& algebra,
   if (syllabary.empty())
     return false;
   Script script;
+  vector<string> fuzzy_groups;
   if (algebra) {
     for (const auto& item : *algebra) {
       auto formula = As<ConfigValue>(item);
@@ -901,13 +930,14 @@ bool DictCompiler::BuildPrism(const an<ConfigList>& algebra,
       }
     }
     Projection projection;
-    if (!projection.Load(algebra)) {
+    if (!projection.Load(algebra, true)) {
       LOG(ERROR) << "failed to load spelling algebra";
       return false;
     }
     for (const auto& syllable : syllabary)
       script.AddSyllable(syllable);
     projection.Apply(&script);
+    fuzzy_groups = projection.fuzzy_groups();
   }
   if ((options_ & kDump) && !script.empty()) {
     path dump_path(prism_->file_path());
@@ -918,7 +948,8 @@ bool DictCompiler::BuildPrism(const an<ConfigList>& algebra,
   {
     prism_->Remove();
     if (!prism_->Build(syllabary, script.empty() ? nullptr : &script,
-                       dict_file_checksum, schema_file_checksum, has_packs) ||
+                       dict_file_checksum, schema_file_checksum, has_packs,
+                       fuzzy_groups) ||
         !prism_->Save()) {
       return false;
     }

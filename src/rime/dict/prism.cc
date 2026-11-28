@@ -25,9 +25,29 @@ struct node_t {
   size_t key_length;
 };
 
-// 在 SpellingDescriptor::type 的高位記錄 is_correction, 避開符號位
-const int32_t kTypeIsCorrectionMask = 1 << 30;
-const int32_t kSpellingTypeMask = ~kTypeIsCorrectionMask;
+// SpellingDescriptor::flags stores quality, fuzzy requirements and correction.
+constexpr uint32_t kTypeIsCorrectionMask = 1u << 30;
+constexpr uint32_t kSpellingTypeMask = 0xf;
+constexpr unsigned kFuzzyShift = 4;
+uint32_t RequiredFuzzy(uint32_t flags) {
+  return (flags >> kFuzzyShift) & kFuzzyGroupMask;
+}
+bool Enabled(uint32_t flags, uint32_t mask) {
+  const auto required = RequiredFuzzy(flags);
+  return (required & mask) == required;
+}
+bool BetterDescriptor(const prism::SpellingDescriptor& a,
+                      const prism::SpellingDescriptor& b) {
+  const auto at = a.flags & kSpellingTypeMask;
+  const auto bt = b.flags & kSpellingTypeMask;
+  if (at != bt)
+    return at < bt;
+  const bool ac = (a.flags & kTypeIsCorrectionMask) != 0;
+  const bool bc = (b.flags & kTypeIsCorrectionMask) != 0;
+  if (ac != bc)
+    return !ac;
+  return a.credibility > b.credibility;
+}
 
 struct CodeChoiceData {
   vector<uint32_t> words;
@@ -63,6 +83,8 @@ bool BuildCodeChoiceData(const Script* script,
     vector<SyllableId> ids;
     ids.reserve(entry.second.size());
     for (const auto& spelling : entry.second) {
+      if (spelling.properties.fuzzy_mask)
+        continue;
       if (spelling.properties.is_correction ||
           spelling.properties.type >= kAbbreviation) {
         ids.clear();
@@ -154,8 +176,8 @@ bool BuildCodeChoiceData(const Script* script,
 
 }  // namespace
 
-const char kPrismFormat[] = "Rime::Prism/7.0";
-const double kPrismFormatVersion = 5.0;
+const char kPrismFormat[] = "Rime::Prism/8.0";
+const double kPrismFormatVersion = 8.0;
 
 const char kPrismFormatPrefix[] = "Rime::Prism/";
 const size_t kPrismFormatPrefixLen = sizeof(kPrismFormatPrefix) - 1;
@@ -163,20 +185,62 @@ const size_t kPrismFormatPrefixLen = sizeof(kPrismFormatPrefix) - 1;
 const char kDefaultAlphabet[] = "abcdefghijklmnopqrstuvwxyz";
 
 SpellingAccessor::SpellingAccessor(prism::SpellingMap* spelling_map,
-                                   SyllableId spelling_id)
-    : spelling_id_(spelling_id), iter_(NULL), end_(NULL) {
-  if (spelling_map &&
-      spelling_id < static_cast<SyllableId>(spelling_map->size)) {
+                                   SyllableId spelling_id,
+                                   uint32_t enabled_fuzzy,
+                                   bool conditional)
+    : spelling_id_(spelling_id),
+      iter_(nullptr),
+      end_(nullptr),
+      enabled_fuzzy_(enabled_fuzzy),
+      conditional_(conditional) {
+  if (spelling_id < 0) {
+    spelling_id_ = -1;
+    return;
+  }
+  if (spelling_map) {
+    if (spelling_id >= static_cast<SyllableId>(spelling_map->size)) {
+      spelling_id_ = -1;
+      return;
+    }
     iter_ = spelling_map->at[spelling_id].begin();
     end_ = spelling_map->at[spelling_id].end();
+    if (conditional_)
+      SelectNext();
+    else if (iter_ == end_)
+      spelling_id_ = -1;
   }
+}
+
+void SpellingAccessor::SelectNext() {
+  while (iter_ && iter_ < end_) {
+    auto* current = iter_;
+    prism::SpellingDescriptor* best = nullptr;
+    // Build stores all alternative paths for one syllable consecutively.
+    do {
+      if (Enabled(current->flags, enabled_fuzzy_) &&
+          (!best || BetterDescriptor(*current, *best)))
+        best = current;
+      ++current;
+    } while (current < end_ && current->syllable_id == iter_->syllable_id);
+    next_ = current;
+    if (best) {
+      iter_ = best;
+      return;
+    }
+    iter_ = next_;
+  }
+  spelling_id_ = -1;
 }
 
 bool SpellingAccessor::Next() {
   if (exhausted())
     return false;
-  if (!iter_ || ++iter_ >= end_)
+  if (conditional_) {
+    iter_ = next_;
+    SelectNext();
+  } else if (!iter_ || ++iter_ >= end_) {
     spelling_id_ = -1;
+  }
   return exhausted();
 }
 
@@ -194,9 +258,10 @@ SyllableId SpellingAccessor::syllable_id() const {
 SpellingProperties SpellingAccessor::properties() const {
   SpellingProperties props;
   if (iter_ && iter_ < end_) {
-    int32_t packed_type = iter_->type;
+    const uint32_t packed_type = iter_->flags;
     props.type = static_cast<SpellingType>(packed_type & kSpellingTypeMask);
     props.is_correction = (packed_type & kTypeIsCorrectionMask) != 0;
+    props.fuzzy_mask = RequiredFuzzy(packed_type);
     props.credibility = iter_->credibility;
     if (!iter_->tips.empty()) {
       string hints = iter_->tips.c_str();
@@ -273,7 +338,8 @@ bool Prism::Build(const Syllabary& syllabary,
                   const Script* script,
                   uint32_t dict_file_checksum,
                   uint32_t schema_file_checksum,
-                  bool has_packs) {
+                  bool has_packs,
+                  const vector<string>& fuzzy_groups) {
   metadata_ = nullptr;
   spelling_map_ = nullptr;
   format_ = 0.0;
@@ -285,6 +351,12 @@ bool Prism::Build(const Syllabary& syllabary,
   size_t map_size = 0;
   size_t tips_bytes = 0;
   size_t max_key_length = 0;
+  bool conditional = false;
+  if (fuzzy_groups.size() > kMaxFuzzyGroups ||
+      set<string>(fuzzy_groups.begin(), fuzzy_groups.end()).size() !=
+          fuzzy_groups.size())
+    return false;
+  const uint32_t allowed = (1u << fuzzy_groups.size()) - 1;
   if (!num_spellings)
     return false;
   if (script) {
@@ -293,6 +365,9 @@ bool Prism::Build(const Syllabary& syllabary,
       max_key_length = (std::max)(max_key_length, it->first.length());
       map_size += it->second.size();
       for (const auto& spelling : it->second) {
+        if (spelling.properties.fuzzy_mask & ~allowed)
+          return false;
+        conditional |= spelling.properties.fuzzy_mask != 0;
         if (!spelling.properties.tips.empty())
           tips_bytes += spelling.properties.tips.size() + 1;
       }
@@ -332,8 +407,11 @@ bool Prism::Build(const Syllabary& syllabary,
   size_t code_bytes = syllabary.size() * sizeof(String);
   for (const auto& code : syllabary)
     code_bytes += code.size() + 1;
+  size_t fuzzy_bytes = fuzzy_groups.size() * sizeof(String);
+  for (const auto& group : fuzzy_groups)
+    fuzzy_bytes += group.size() + 1;
   if (!Create(image_size + estimated_map_size + code_bytes + choice_bytes +
-              kReservedSize)) {
+              fuzzy_bytes + kReservedSize)) {
     LOG(ERROR) << "Error creating prism file '" << file_path() << "'.";
     return false;
   }
@@ -359,6 +437,17 @@ bool Prism::Build(const Syllabary& syllabary,
   for (const auto& code : syllabary) {
     if (!CopyString(code, &codes[code_index++]))
       return false;
+  }
+  if (!fuzzy_groups.empty()) {
+    auto groups = Allocate<String>(fuzzy_groups.size());
+    if (!groups)
+      return false;
+    metadata->fuzzy_groups.at = groups;
+    metadata->fuzzy_groups.size = fuzzy_groups.size();
+    for (size_t i = 0; i < fuzzy_groups.size(); ++i) {
+      if (!CopyString(fuzzy_groups[i], &groups[i]))
+        return false;
+    }
   }
   // alphabet
   {
@@ -398,21 +487,46 @@ bool Prism::Build(const Syllabary& syllabary,
         LOG(ERROR) << "Error creating spelling descriptors.";
         return false;
       }
-      auto j = i->second.begin();
       auto desc = item->begin();
-      for (; j != i->second.end(); ++j, ++desc) {
-        desc->syllable_id = syllable_to_id[j->str];
-        // 打包寫入 type + is_correction
-        int32_t packed_type = static_cast<int32_t>(j->properties.type);
-        if (j->properties.is_correction)
-          packed_type |= kTypeIsCorrectionMask;
-        desc->type = packed_type;
-        desc->credibility = j->properties.credibility;
-        string persisted_tips = j->properties.tips;
-        if (!persisted_tips.empty() &&
-            !CopyString(persisted_tips, &desc->tips)) {
+      auto write = [&](const Spelling& spelling) {
+        auto id = syllable_to_id.find(spelling.str);
+        if (id == syllable_to_id.end())
+          return false;
+        desc->syllable_id = id->second;
+        uint32_t flags = static_cast<uint32_t>(spelling.properties.type) |
+                         (spelling.properties.fuzzy_mask << kFuzzyShift);
+        if (spelling.properties.is_correction)
+          flags |= kTypeIsCorrectionMask;
+        desc->flags = flags;
+        desc->credibility = spelling.properties.credibility;
+        const string& tips = spelling.properties.tips;
+        if (!tips.empty() && !CopyString(tips, &desc->tips)) {
           LOG(ERROR) << "Error creating spelling properties.";
           return false;
+        }
+        ++desc;
+        return true;
+      };
+      if (conditional && list_size > 1) {
+        // Preserve first-occurrence order while grouping alternative paths.
+        map<string, size_t> positions;
+        vector<vector<const Spelling*>> groups;
+        for (const auto& spelling : i->second) {
+          auto inserted = positions.emplace(spelling.str, groups.size());
+          if (inserted.second)
+            groups.emplace_back();
+          groups[inserted.first->second].push_back(&spelling);
+        }
+        for (const auto& group : groups) {
+          for (const auto* spelling : group) {
+            if (!write(*spelling))
+              return false;
+          }
+        }
+      } else {
+        for (const auto& spelling : i->second) {
+          if (!write(spelling))
+            return false;
         }
       }
     }
@@ -437,7 +551,7 @@ bool Prism::Build(const Syllabary& syllabary,
   // at last, complete the metadata
   std::strncpy(metadata->format, kPrismFormat,
                prism::Metadata::kFormatMaxLength);
-  format_ = 7.0;
+  format_ = 8.0;
   return true;
 }
 
@@ -483,10 +597,22 @@ void Prism::CommonPrefixSearch(std::string_view key, vector<Match>* result) {
 
 void Prism::ExpandSearch(std::string_view key,
                          vector<Match>* result,
-                         size_t limit) {
+                         size_t limit,
+                         uint32_t enabled_fuzzy,
+                         SpellingType max_type) {
   if (!result)
     return;
   result->clear();
+  auto eligible = [&](int id) {
+    if (!HasConditionalSpellings())
+      return true;
+    for (auto accessor = QuerySpelling(id, enabled_fuzzy);
+         !accessor.exhausted(); accessor.Next()) {
+      if (accessor.properties().type <= max_type)
+        return true;
+    }
+    return false;
+  };
   size_t count = 0;
   size_t node_pos = 0;
   size_t key_pos = 0;
@@ -495,7 +621,7 @@ void Prism::ExpandSearch(std::string_view key,
   // key is not a valid path
   if (ret == -2)
     return;
-  if (ret != -1) {
+  if (ret != -1 && eligible(ret)) {
     result->push_back(Match{ret, key_pos});
     if (limit && ++count >= limit)
       return;
@@ -515,7 +641,7 @@ void Prism::ExpandSearch(std::string_view key,
         continue;
       const size_t matched_length = node.key_length + next_key_pos;
       q.emplace(next_node_pos, matched_length);
-      if (ret >= 0) {
+      if (ret >= 0 && eligible(ret)) {
         result->push_back(Match{ret, matched_length});
         if (limit && ++count >= limit)
           return;
@@ -552,8 +678,23 @@ prism::CodeChoiceView Prism::QueryCodeChoices(std::string_view key) const {
   return QueryCodeChoices(id);
 }
 
-SpellingAccessor Prism::QuerySpelling(SyllableId spelling_id) {
-  return SpellingAccessor(spelling_map_, spelling_id);
+uint32_t Prism::FuzzyMask(const vector<string>& groups) const {
+  uint32_t result = 0;
+  if (!metadata_ || !IsOpen())
+    return result;
+  for (size_t i = 0; i < metadata_->fuzzy_groups.size && i < kMaxFuzzyGroups;
+       ++i) {
+    const auto* name = metadata_->fuzzy_groups.at[i].c_str();
+    if (std::find(groups.begin(), groups.end(), name) != groups.end())
+      result |= 1u << i;
+  }
+  return result;
+}
+
+SpellingAccessor Prism::QuerySpelling(SyllableId spelling_id,
+                                      uint32_t enabled_fuzzy) {
+  return SpellingAccessor(spelling_map_, spelling_id, enabled_fuzzy,
+                          HasConditionalSpellings());
 }
 
 size_t Prism::array_size() const {

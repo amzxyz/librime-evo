@@ -87,6 +87,7 @@ class Syllabifier {
                                   Prism& prism,
                                   SyllableGraph* graph);
   RIME_DLL void EnableCorrection(Corrector* corrector);
+  void SetFuzzyMask(uint32_t mask) { fuzzy_mask_ = mask; }
   void SetAuxiliaryLookup(AuxMatchProvider lookup) {
     auxiliary_lookup_ = std::move(lookup);
   }
@@ -98,6 +99,7 @@ class Syllabifier {
   string delimiters_;
   bool enable_completion_ = false;
   bool strict_spelling_ = false;
+  uint32_t fuzzy_mask_ = 0;
   Projection* canonicalizer_ = nullptr;
   Corrector* corrector_ = nullptr;
   AuxMatchProvider auxiliary_lookup_;

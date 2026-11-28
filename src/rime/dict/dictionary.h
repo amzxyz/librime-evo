@@ -117,6 +117,8 @@ class Dictionary : public Class<Dictionary, const Ticket&> {
   const an<Prism>& prism() const { return prism_; }
   bool AddPrism(const string& name, const an<Prism>& prism);
   bool SetPrism(const string& name);
+  void SetFuzzyTypes(const vector<string>& groups);
+  uint32_t fuzzy_mask() const { return fuzzy_mask_; }
 
  private:
   string name_;
@@ -126,6 +128,9 @@ class Dictionary : public Class<Dictionary, const Ticket&> {
   map<string, an<Prism>> prisms_;
   vector<SyllableIdMap> code_maps_;
   bool bindings_valid_ = false;
+  const Prism* fuzzy_prism_ = nullptr;
+  vector<string> fuzzy_types_;
+  uint32_t fuzzy_mask_ = 0;
 };
 
 class ResourceResolver;

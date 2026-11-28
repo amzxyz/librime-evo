@@ -22,13 +22,15 @@ class Script : public map<string, vector<Spelling>> {
   RIME_DLL bool AddSyllable(const string& syllable);
   void Merge(const string& s,
              const SpellingProperties& sp,
-             const vector<Spelling>& v);
+             const vector<Spelling>& v,
+             bool conditional = true);
   void Dump(const path& file_path) const;
 };
 
 class Projection {
  public:
-  RIME_DLL bool Load(an<ConfigList> settings);
+  RIME_DLL bool Load(an<ConfigList> settings, bool allow_fuzzy = false);
+  const vector<string>& fuzzy_groups() const { return fuzzy_groups_; }
   // "spelling" -> "gnilleps"
   RIME_DLL bool Apply(string* value);
   // {z, y, x} -> {a, b, c, d}
@@ -37,6 +39,7 @@ class Projection {
 
  protected:
   vector<of<Calculation>> calculation_;
+  vector<string> fuzzy_groups_;
 };
 
 }  // namespace rime

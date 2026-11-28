@@ -9,6 +9,7 @@ void SpellingProperties::Compose(const SpellingProperties& delta) {
   }
   // 權重累加
   credibility += delta.credibility;
+  fuzzy_mask |= delta.fuzzy_mask;
   // 糾錯標記
   if (delta.is_correction) {
     is_correction = true;

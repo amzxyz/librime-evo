@@ -8,18 +8,23 @@
 #ifndef RIME_SPELLING_H_
 #define RIME_SPELLING_H_
 
+#include <cstdint>
 #include <rime/common.h>
 
 namespace rime {
 
 enum SpellingType {
   kNormalSpelling,
-  kFuzzySpelling,
+  kWeakSpelling,
   kAbbreviation,
   kCompletion,
   kAmbiguousSpelling,
   kInvalidSpelling
 };
+
+// Conditional fuzzy groups are independent of spelling quality.
+constexpr size_t kMaxFuzzyGroups = 16;
+constexpr uint32_t kFuzzyGroupMask = (1u << kMaxFuzzyGroups) - 1;
 
 struct SpellingProperties {
   SpellingType type = kNormalSpelling;
@@ -27,6 +32,7 @@ struct SpellingProperties {
   double credibility = 0.0;
   string tips;
   bool is_correction = false;
+  uint32_t fuzzy_mask = 0;
   bool auxiliary = false;  // AUX hit; may carry a rule-specific penalty
   bool auxiliary_display = false;
 

@@ -32,9 +32,11 @@ class Calculus {
   RIME_DLL Calculus();
   void Register(const string& token, Calculation::Factory* factory);
   RIME_DLL Calculation* Parse(const string& definition);
+  const vector<string>& fuzzy_groups() const { return fuzzy_groups_; }
 
  private:
   map<string, Calculation::Factory*> factories_;
+  vector<string> fuzzy_groups_;
 };
 
 // xlit/zyx/abc/
@@ -76,11 +78,24 @@ class Derivation : public Transformation {
   bool deletion() override { return false; }
 };
 
-// fuzz/zyx/zx/
-class Fuzzing : public Derivation {
+// weak/zyx/zx/
+class WeakDerivation : public Derivation {
  public:
   static Factory Parse;
   bool Apply(Spelling* spelling) override;
+};
+
+// fuzzy/pattern/replacement/group: conditional full-quality derivation.
+class FuzzyDerivation : public Derivation {
+ public:
+  static Factory Parse;
+  bool Apply(Spelling* spelling) override;
+  const string& group() const { return group_; }
+  void set_mask(uint32_t mask) { mask_ = mask; }
+
+ private:
+  string group_;
+  uint32_t mask_ = 0;
 };
 
 // abbrev/zyx/z/

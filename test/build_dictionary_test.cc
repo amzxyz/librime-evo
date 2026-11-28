@@ -1321,6 +1321,51 @@ independent:
   }
 }
 
+TEST_F(RimeBuildDictionaryTest, FuzzyGroupsSwitchAllTranslators) {
+  WriteSchema(R"YAML(fuzzy_types:
+  - {id: initial, label: Initial}
+  - {id: final, label: Final}
+build:
+  dictionaries:
+    build_dict_test:
+      algebra:
+        - fuzzy/^h/f/initial
+        - fuzzy/ao$/ou/final
+lookup:
+  dictionary: build_dict_test
+  tag: abc
+  user_dict_mode: off
+  enable_completion: false
+  enable_sentence: false
+)YAML");
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  for (const char* name :
+       {"script_translator", "table_translator", "reverse_lookup_translator"}) {
+    SCOPED_TRACE(name);
+    auto engine = OpenEngine();
+    the<Translator> translator(
+        Translator::Require(name)->Create(Ticket(engine.get(), "lookup")));
+    ASSERT_TRUE(translator);
+    ASSERT_TRUE(engine->SelectSetting("fuzzy_types", {}));
+    EXPECT_EQ("好", Query(translator.get(), "hao"));
+    EXPECT_TRUE(Query(translator.get(), "fao").empty());
+    EXPECT_TRUE(Query(translator.get(), "hou").empty());
+    EXPECT_TRUE(Query(translator.get(), "fou").empty());
+    ASSERT_TRUE(engine->SelectSetting("fuzzy_types", {"initial"}));
+    EXPECT_EQ("好", Query(translator.get(), "fao"));
+    EXPECT_TRUE(Query(translator.get(), "fou").empty());
+    ASSERT_TRUE(engine->SelectSetting("fuzzy_types", {"final"}));
+    EXPECT_EQ("好", Query(translator.get(), "hou"));
+    EXPECT_TRUE(Query(translator.get(), "fao").empty());
+    EXPECT_TRUE(Query(translator.get(), "fou").empty());
+    ASSERT_TRUE(engine->SelectSetting("fuzzy_types", {"initial", "final"}));
+    EXPECT_EQ("好", Query(translator.get(), "fou"));
+    ASSERT_TRUE(engine->SelectSetting("fuzzy_types", {}));
+    EXPECT_EQ("好", Query(translator.get(), "hao"));
+    EXPECT_TRUE(Query(translator.get(), "fou").empty());
+  }
+}
+
 TEST_F(RimeBuildDictionaryTest, RejectsInvalidTypeOptions) {
   for (const char* options : {"[{option: zrm}, {option: zrm}]", "[]"}) {
     WriteSchema(string(kDefinitions) + "input_types: " + options +

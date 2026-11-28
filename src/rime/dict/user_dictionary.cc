@@ -316,7 +316,7 @@ bool UserDictionary::readonly() const {
 // to fix the following issue, we have to reintroduce backdating in db scan:
 // given aaa=A, b=B, ab=C, derive/^(aa)a$/$1/,
 // the input 'aaab' can be either aaa'b=AB or aa'ab=AC.
-// note that backdating works only for normal or fuzzy spellings, but not for
+// note that backdating works only for normal or weak spellings, but not for
 // abbreviations such as 'shsh' in the previous example.
 
 void UserDictionary::DfsLookup(const SyllableGraph& syll_graph,

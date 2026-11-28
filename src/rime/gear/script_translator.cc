@@ -224,6 +224,7 @@ class ScriptSyllabifier : public PhraseSyllabifier {
                      !word_auxiliary_length && translator->enable_completion(),
                      translator->strict_spelling(),
                      translator->canonicalizer()) {
+    syllabifier_.SetFuzzyMask(translator->fuzzy_mask());
     if (corrector) {
       syllabifier_.EnableCorrection(corrector);
     }
@@ -548,6 +549,10 @@ an<Translation> ScriptTranslator::QueryDirectWordAuxiliary(
       *words += branch;
   }
   return words->exhausted() ? nullptr : words;
+}
+
+uint32_t ScriptTranslator::fuzzy_mask() const {
+  return dict_ ? dict_->fuzzy_mask() : 0;
 }
 
 bool ScriptTranslator::SelectPrism() {

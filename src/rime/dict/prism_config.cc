@@ -3,6 +3,7 @@
 //
 #include <algorithm>
 #include <rime/config.h>
+#include <rime/algo/spelling.h>
 #include <rime/dict/prism_config.h>
 
 namespace rime {
@@ -123,10 +124,18 @@ bool SettingGroupConfig::Load(Config* config, const string& group) {
     return false;
   an<ConfigList> list;
   an<ConfigItem> default_item;
-  if (group == "input_types" || group == "aux_types") {
+  if (group == "input_types" || group == "aux_types" ||
+      group == "fuzzy_types") {
     if (config->IsNull(group))
       return true;
     list = config->GetList(group);
+    if (group == "fuzzy_types") {
+      mode = kMultiple;
+      if (list && list->empty())
+        return true;
+      if (!list || list->size() > kMaxFuzzyGroups)
+        return false;
+    }
   } else {
     auto definition = config->GetMap("runtime_settings/" + group);
     if (!definition)
@@ -213,7 +222,7 @@ bool SettingGroupConfig::LoadGroups(Config* config,
   groups->clear();
   if (!config)
     return false;
-  set<string> names{"input_types", "aux_types"};
+  set<string> names{"input_types", "aux_types", "fuzzy_types"};
   if (!config->IsNull("runtime_settings")) {
     auto definitions = config->GetMap("runtime_settings");
     if (!definitions)

@@ -93,3 +93,36 @@ TEST(RimeAlgebraTest, AuxiliaryAndNormalSpellingRemainDistinct) {
   EXPECT_EQ("ab;cd", script["abc"][0].str);
   EXPECT_EQ(0u, script.count("ab;cd"));
 }
+
+TEST(RimeAlgebraTest, FuzzyPathsComposeAndAlternativesRemainIndependent) {
+  auto settings = rime::New<rime::ConfigList>();
+  for (const char* rule :
+       {"fuzzy/^zh/z/z_zh", "fuzzy/^z(?!h)/zh/z_zh", "fuzzy/ang$/an/an_ang",
+        "fuzzy/an$/ang/an_ang", "fuzzy/^zh/z/other"}) {
+    settings->Append(rime::New<rime::ConfigValue>(rule));
+  }
+  rime::Projection projection;
+  EXPECT_FALSE(projection.Load(settings));
+  ASSERT_TRUE(projection.Load(settings, true));
+  rime::Script script;
+  for (const auto& syllable : {"zang", "zhang", "zan", "zhan"})
+    script.AddSyllable(syllable);
+  ASSERT_TRUE(projection.Apply(&script));
+  rime::set<uint32_t> zhang, zhan;
+  size_t native = 0;
+  for (const auto& spelling : script["zang"]) {
+    EXPECT_EQ(rime::kNormalSpelling, spelling.properties.type);
+    EXPECT_DOUBLE_EQ(0.0, spelling.properties.credibility);
+    if (spelling.str == "zang") {
+      EXPECT_EQ(0u, spelling.properties.fuzzy_mask);
+      ++native;
+    } else if (spelling.str == "zhang") {
+      zhang.insert(spelling.properties.fuzzy_mask);
+    } else if (spelling.str == "zhan") {
+      zhan.insert(spelling.properties.fuzzy_mask);
+    }
+  }
+  EXPECT_EQ(1u, native);
+  EXPECT_EQ((rime::set<uint32_t>{1, 4}), zhang);
+  EXPECT_EQ((rime::set<uint32_t>{3, 6}), zhan);
+}

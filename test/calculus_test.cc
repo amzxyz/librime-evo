@@ -251,3 +251,30 @@ TEST(RimeCalculusTest, AuxiliaryAbbreviationHasLowerCredibility) {
   EXPECT_EQ(rime::kAbbreviation, s.properties.type);
   EXPECT_DOUBLE_EQ(std::log(0.5), s.properties.credibility);
 }
+
+TEST(RimeCalculusTest, WeakRetainsPenaltyAndFuzzyIsFullQuality) {
+  Calculus calc;
+  the<Calculation> weak(calc.Parse("weak/^zh/z/"));
+  ASSERT_TRUE(weak);
+  Spelling s("zhang");
+  ASSERT_TRUE(weak->Apply(&s));
+  EXPECT_EQ(kWeakSpelling, s.properties.type);
+  EXPECT_DOUBLE_EQ(log(0.5), s.properties.credibility);
+  EXPECT_EQ(0u, s.properties.fuzzy_mask);
+  EXPECT_EQ(nullptr, calc.Parse("fuzz/^zh/z/"));
+  EXPECT_EQ(nullptr, calc.Parse("derive/^zh/z/fuzz"));
+  EXPECT_EQ(nullptr, calc.Parse("fuzzy/^zh/z/"));
+  the<Calculation> fuzzy(calc.Parse("fuzzy/^zh/z/z_zh"));
+  ASSERT_TRUE(fuzzy);
+  Spelling t("zhang");
+  ASSERT_TRUE(fuzzy->Apply(&t));
+  EXPECT_EQ("zang", t.str);
+  EXPECT_EQ(kNormalSpelling, t.properties.type);
+  EXPECT_DOUBLE_EQ(0.0, t.properties.credibility);
+  EXPECT_EQ(1u, t.properties.fuzzy_mask);
+  the<Calculation> second(calc.Parse("fuzzy/ang$/an/an_ang"));
+  ASSERT_TRUE(second);
+  ASSERT_TRUE(second->Apply(&t));
+  EXPECT_EQ("zan", t.str);
+  EXPECT_EQ(3u, t.properties.fuzzy_mask);
+}

@@ -48,6 +48,7 @@ class ScriptTranslator : public Translator,
   string Spell(const Code& code);
   string GetPrecedingText(size_t start) const;
   bool SelectPrism();
+  uint32_t fuzzy_mask() const;
 
   // options
   int max_homophones() const { return max_homophones_; }

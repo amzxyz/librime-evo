@@ -32,10 +32,10 @@ request is only valid during Collect.
 
 Register each unit with a unique ID, estimated peak memory, outputs and
 the owning schema. To share a unit across schemas, add each owner.
-For example, a corrector unit can depend on `dictionary:wanxiang`:
+For example, a corrector unit can depend on `dictionary:example_pinyin`:
 
 ```cpp
-plan->AddDependency("dictionary:wanxiang", "corrector:wanxiang");
+plan->AddDependency("dictionary:example_pinyin", "corrector:example_pinyin");
 ```
 
 Explicit dependencies are resolved after collection, independent of

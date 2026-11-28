@@ -95,7 +95,7 @@ int Syllabifier::BuildSyllableGraph(const string& input,
       corrector_->ToleranceSearch(prism, string{current_input}, &corrections,
                                   5);
       for (const auto& m : corrections) {
-        for (auto accessor = prism.QuerySpelling(m.first);
+        for (auto accessor = prism.QuerySpelling(m.first, fuzzy_mask_);
              !accessor.exhausted(); accessor.Next()) {
           auto props = accessor.properties();
           if (props.type == kNormalSpelling && !props.is_correction) {
@@ -124,13 +124,13 @@ int Syllabifier::BuildSyllableGraph(const string& input,
         // when spelling algebra is enabled,
         // a spelling evaluates to a set of syllables;
         // otherwise, it resembles exactly the syllable itself.
-        SpellingAccessor accessor(prism.QuerySpelling(m.value));
+        SpellingAccessor accessor(prism.QuerySpelling(m.value, fuzzy_mask_));
         while (!accessor.exhausted()) {
           SyllableId syllable_id = accessor.syllable_id();
           EdgeProperties props(accessor.properties());
           if (strict_spelling_ && matches_input &&
               props.type != kNormalSpelling) {
-            // disqualify fuzzy spelling or abbreviation as single word
+            // disqualify weak spelling or abbreviation as single word
           } else {
             props.end_pos = end_pos;
             // add a syllable with properties to the edge's
@@ -201,9 +201,8 @@ int Syllabifier::BuildSyllableGraph(const string& input,
   DLOG(INFO) << "remove stale vertices and edges";
   set<int> good;
   good.insert(farthest);
-  // fuzzy spellings are immune to invalidation by normal spellings
-  SpellingType last_type =
-      (std::max)(graph->vertices[farthest], kFuzzySpelling);
+  // weak spellings are immune to invalidation by normal spellings
+  SpellingType last_type = (std::max)(graph->vertices[farthest], kWeakSpelling);
   for (int i = farthest - 1; i >= 0; --i) {
     if (graph->vertices.find(i) == graph->vertices.end())
       continue;
@@ -259,7 +258,8 @@ int Syllabifier::BuildSyllableGraph(const string& input,
     DLOG(INFO) << "completion enabled";
     const size_t kExpandSearchLimit = 512;
     vector<Prism::Match> keys;
-    prism.ExpandSearch(input.substr(farthest), &keys, kExpandSearchLimit);
+    prism.ExpandSearch(input.substr(farthest), &keys, kExpandSearchLimit,
+                       fuzzy_mask_, kWeakSpelling);
     if (!keys.empty()) {
       size_t current_pos = farthest;
       size_t end_pos = input.length();
@@ -272,7 +272,7 @@ int Syllabifier::BuildSyllableGraph(const string& input,
         // when spelling algebra is enabled,
         // a spelling evaluates to a set of syllables;
         // otherwise, it resembles exactly the syllable itself.
-        SpellingAccessor accessor(prism.QuerySpelling(m.value));
+        SpellingAccessor accessor(prism.QuerySpelling(m.value, fuzzy_mask_));
         while (!accessor.exhausted()) {
           SyllableId syllable_id = accessor.syllable_id();
           SpellingProperties props = accessor.properties();

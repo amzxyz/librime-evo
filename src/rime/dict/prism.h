@@ -24,8 +24,8 @@ using Credibility = float;
 
 struct SpellingDescriptor {
   SyllableId syllable_id;
-  // bit 30: is_correction
-  int32_t type;
+  // bits 0-3: type; 4-19: fuzzy requirements; 30: correction.
+  uint32_t flags;
   Credibility credibility;
   String tips;
 };
@@ -53,6 +53,8 @@ struct Metadata {
   // v7.0: dense spelling offsets followed by shared choice records.
   List<uint32_t> code_choices;
   List<char> code_choice_strings;
+  // v8.0: stable IDs for conditional spelling groups.
+  List<String> fuzzy_groups;
 };
 
 // Borrowed view of a compiled choice list, valid while its Prism is mapped.
@@ -75,16 +77,23 @@ class CodeChoiceView {
 
 class SpellingAccessor {
  public:
-  SpellingAccessor(prism::SpellingMap* spelling_map, SyllableId spelling_id);
-  bool Next();
-  bool exhausted() const;
-  SyllableId syllable_id() const;
-  SpellingProperties properties() const;
+  SpellingAccessor(prism::SpellingMap* spelling_map,
+                   SyllableId spelling_id,
+                   uint32_t enabled_fuzzy = 0,
+                   bool conditional = true);
+  RIME_DLL bool Next();
+  RIME_DLL bool exhausted() const;
+  RIME_DLL SyllableId syllable_id() const;
+  RIME_DLL SpellingProperties properties() const;
 
  protected:
   SyllableId spelling_id_;
   prism::SpellingDescriptor* iter_;
   prism::SpellingDescriptor* end_;
+  prism::SpellingDescriptor* next_ = nullptr;
+  uint32_t enabled_fuzzy_ = 0;
+  bool conditional_ = true;
+  void SelectNext();
 };
 
 class Script;
@@ -101,19 +110,28 @@ class Prism : public MappedFile {
                       const Script* script = nullptr,
                       uint32_t dict_file_checksum = 0,
                       uint32_t schema_file_checksum = 0,
-                      bool has_packs = false);
+                      bool has_packs = false,
+                      const vector<string>& fuzzy_groups = {});
 
   RIME_DLL bool HasKey(std::string_view key);
   RIME_DLL bool GetValue(std::string_view key, int* value) const;
   RIME_DLL void CommonPrefixSearch(std::string_view key, vector<Match>* result);
   RIME_DLL void ExpandSearch(std::string_view key,
                              vector<Match>* result,
-                             size_t limit);
+                             size_t limit,
+                             uint32_t enabled_fuzzy = 0,
+                             SpellingType max_type = kInvalidSpelling);
   // Strict refinements of compiled spelling sets; no keyboard configuration.
   RIME_DLL bool HasCodeChoices() const;
   RIME_DLL prism::CodeChoiceView QueryCodeChoices(int spelling_id) const;
   RIME_DLL prism::CodeChoiceView QueryCodeChoices(std::string_view key) const;
-  SpellingAccessor QuerySpelling(SyllableId spelling_id);
+  RIME_DLL uint32_t FuzzyMask(const vector<string>& groups) const;
+  bool HasConditionalSpellings() const {
+    return IsOpen() && format_ >= 8.0 && metadata_ &&
+           metadata_->fuzzy_groups.size > 0;
+  }
+  RIME_DLL SpellingAccessor QuerySpelling(SyllableId spelling_id,
+                                          uint32_t enabled_fuzzy = 0);
 
   bool has_syllabary() const { return format_ >= 6.0; }
   bool has_code_choice_format() const { return format_ >= 7.0; }

@@ -53,7 +53,8 @@ void AuxiliaryMatcher::Lookup(const string& input,
     database_->CommonPrefixLookup(input.substr(match.length), &suffixes);
     if (suffixes.empty())
       continue;
-    for (auto accessor = primary_->prism()->QuerySpelling(match.value);
+    for (auto accessor = primary_->prism()->QuerySpelling(
+             match.value, primary_->fuzzy_mask());
          !accessor.exhausted(); accessor.Next()) {
       const auto base = accessor.properties();
       if (base.type >= kAbbreviation || base.is_correction)

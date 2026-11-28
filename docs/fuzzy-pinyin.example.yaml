@@ -1,0 +1,39 @@
+# 合并 fuzzy_types 到方案根节点；将 fuzzy_rules 通过 __include 或 __patch
+# 加入拼写转写链，在去声调及双拼/九键编码变换前执行。
+# 示例同时匹配带声调和不带声调的拼音，韵母规则只匹配音节末尾。
+fuzzy_types:
+  - {id: z_zh, label: z / zh}
+  - {id: c_ch, label: c / ch}
+  - {id: s_sh, label: s / sh}
+  - {id: n_l, label: n / l}
+  - {id: f_h, label: f / h}
+  - {id: r_y, label: r / y}
+  - {id: r_l, label: r / l}
+  - {id: g_k, label: g / k}
+  - {id: an_ang, label: an / ang}
+  - {id: en_eng, label: en / eng}
+  - {id: in_ing, label: in / ing}
+
+fuzzy_rules:
+  - fuzzy/^zh/z/z_zh
+  - fuzzy/^z(?!h)/zh/z_zh
+  - fuzzy/^ch/c/c_ch
+  - fuzzy/^c(?!h)/ch/c_ch
+  - fuzzy/^sh/s/s_sh
+  - fuzzy/^s(?!h)/sh/s_sh
+  - fuzzy/^n/l/n_l
+  - fuzzy/^l/n/n_l
+  - fuzzy/^f/h/f_h
+  - fuzzy/^h/f/f_h
+  - fuzzy/^r/y/r_y
+  - fuzzy/^y/r/r_y
+  - fuzzy/^r/l/r_l
+  - fuzzy/^l/r/r_l
+  - fuzzy/^g/k/g_k
+  - fuzzy/^k/g/g_k
+  - fuzzy/(ā|á|ǎ|à|a)ng$/$1n/an_ang
+  - fuzzy/(ā|á|ǎ|à|a)n$/$1ng/an_ang
+  - fuzzy/(ē|é|ě|è|e)ng$/$1n/en_eng
+  - fuzzy/(ē|é|ě|è|e)n$/$1ng/en_eng
+  - fuzzy/(ī|í|ǐ|ì|i)ng$/$1n/in_ing
+  - fuzzy/(ī|í|ǐ|ì|i)n$/$1ng/in_ing
