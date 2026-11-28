@@ -3,75 +3,169 @@
 //
 #include <algorithm>
 #include <rime/config.h>
-#include <rime/context.h>
 #include <rime/dict/prism_config.h>
 
 namespace rime {
-
-bool OptionGroupConfig::Contains(const string& option) const {
-  return std::any_of(options.begin(), options.end(),
-                     [&](const auto& item) { return item.option == option; });
-}
-
-string OptionGroupConfig::InitialOption(const Context* context) const {
-  if (context) {
-    for (const auto& item : options) {
-      if (context->get_option(item.option))
-        return item.option;
-    }
-  }
-  return options.empty() ? string() : options.front().option;
-}
 
 namespace {
 string ChoicePath(const string& schema, const string& group) {
   return "var/type_groups/" + schema + "/" + group;
 }
+
+bool ValidId(const string& id) {
+  return !id.empty() && id.find('/') == string::npos && id.front() != '_';
+}
 }  // namespace
 
-string OptionGroupConfig::RestoreChoice(Config* user,
-                                        const string& schema,
-                                        const string& group) const {
-  string selected;
-  if (user && user->GetString(ChoicePath(schema, group), &selected)) {
-    if (Contains(selected))
-      return selected;
-    if (!selected.empty())
-      return options.empty() ? string() : options.front().option;
-  }
-  return InitialOption(nullptr);
+bool SettingGroupConfig::Contains(const string& value) const {
+  return std::any_of(options.begin(), options.end(),
+                     [&](const auto& item) { return item.option == value; });
 }
 
-bool OptionGroupConfig::SaveChoice(Config* user,
-                                   const string& schema,
-                                   const string& group,
-                                   const string& option) {
-  if (!user || option.empty())
+bool SettingGroupConfig::Normalize(vector<string>* values) const {
+  if (!values || (mode != kMultiple && values->size() != 1))
+    return false;
+  set<string> unique;
+  for (const auto& value : *values) {
+    if (!Contains(value) || !unique.insert(value).second)
+      return false;
+  }
+  values->clear();
+  for (const auto& item : options) {
+    if (unique.count(item.option))
+      values->push_back(item.option);
+  }
+  return true;
+}
+
+vector<string> SettingGroupConfig::RestoreValues(Config* user,
+                                                 const string& schema,
+                                                 const string& group) const {
+  if (!user)
+    return defaults;
+  const string path = ChoicePath(schema, group);
+  vector<string> values;
+  if (mode == kMultiple) {
+    auto list = user->GetList(path);
+    if (!list)
+      return defaults;
+    for (const auto& item : *list) {
+      auto value = As<ConfigValue>(item);
+      if (value && Contains(value->str()) &&
+          std::find(values.begin(), values.end(), value->str()) == values.end())
+        values.push_back(value->str());
+    }
+  } else if (mode == kBoolean) {
+    bool value = false;
+    if (!user->GetBool(path, &value))
+      return defaults;
+    values.push_back(value ? "true" : "false");
+  } else {
+    string value;
+    if (!user->GetString(path, &value) || !Contains(value))
+      return defaults;
+    values.push_back(value);
+  }
+  return Normalize(&values) ? values : defaults;
+}
+
+bool SettingGroupConfig::SaveValues(Config* user,
+                                    const string& schema,
+                                    const string& group,
+                                    vector<string> values) const {
+  if (!ValidId(schema) || !ValidId(group) || !Normalize(&values))
+    return false;
+  if (!user)
     return false;
   const string path = ChoicePath(schema, group);
-  string previous;
-  if (user->GetString(path, &previous) && previous == option)
+  auto previous = user->GetItem(path);
+  an<ConfigItem> next;
+  if (mode == kMultiple) {
+    auto list = New<ConfigList>();
+    for (const auto& value : values)
+      list->Append(New<ConfigValue>(value));
+    next = list;
+  } else if (mode == kBoolean) {
+    next = New<ConfigValue>(values.front() == "true");
+  } else {
+    next = New<ConfigValue>(values.front());
+  }
+  if (previous && RestoreValues(user, schema, group) == values) {
+    // A missing or invalid saved value must not suppress an explicit choice.
+    bool exact = false;
+    if (mode == kMultiple) {
+      auto list = As<ConfigList>(previous);
+      exact = list && list->size() == values.size();
+      for (size_t i = 0; exact && i < values.size(); ++i) {
+        auto item = list->GetValueAt(i);
+        exact = item && item->str() == values[i];
+      }
+    } else {
+      auto value = As<ConfigValue>(previous);
+      exact = value && value->str() == values.front();
+    }
+    if (exact)
+      return true;
+  }
+  if (!user->SetItem(path, next))
+    return false;
+  if (user->Save())
     return true;
-  return user->SetString(path, option) && user->Save();
+  user->SetItem(path, previous);
+  return false;
 }
 
-bool OptionGroupConfig::Load(Config* config, const string& group) {
+bool SettingGroupConfig::Load(Config* config, const string& group) {
   options.clear();
-  if (!config || config->IsNull(group))
-    return true;
-  auto list = config->GetList(group);
-  if (!list) {
-    LOG(ERROR) << group << " must be a list";
+  defaults.clear();
+  mode = kSingle;
+  if (!config || !ValidId(group))
+    return false;
+  an<ConfigList> list;
+  an<ConfigItem> default_item;
+  if (group == "input_types" || group == "aux_types") {
+    if (config->IsNull(group))
+      return true;
+    list = config->GetList(group);
+  } else {
+    auto definition = config->GetMap("runtime_settings/" + group);
+    if (!definition)
+      return false;
+    auto kind = definition->GetValue("mode");
+    if (!kind)
+      return false;
+    if (kind->str() == "boolean")
+      mode = kBoolean;
+    else if (kind->str() == "multiple")
+      mode = kMultiple;
+    else if (kind->str() != "single")
+      return false;
+    list = As<ConfigList>(definition->Get("values"));
+    default_item = definition->Get("default");
+    if (mode == kBoolean && !list) {
+      list = New<ConfigList>();
+      for (const string id : {"false", "true"}) {
+        auto entry = New<ConfigMap>();
+        entry->Set("id", New<ConfigValue>(id));
+        list->Append(entry);
+      }
+    }
+  }
+  if (!list || list->empty()) {
+    LOG(ERROR) << group << " requires a nonempty values list";
     return false;
   }
   set<string> names;
   for (const auto& item : *list) {
     auto entry = As<ConfigMap>(item);
-    auto value = entry ? entry->GetValue("option") : nullptr;
+    auto value = entry ? entry->GetValue("id") : nullptr;
+    // Existing input/aux schema declarations use option as the value ID.
+    if (!value && entry && (group == "input_types" || group == "aux_types"))
+      value = entry->GetValue("option");
     PrismConfig::Selection selection;
     if (!value || !value->GetString(&selection.option) ||
-        selection.option.empty() || !names.insert(selection.option).second) {
-      LOG(ERROR) << group << " requires unique nonempty option names";
+        !ValidId(selection.option) || !names.insert(selection.option).second) {
+      LOG(ERROR) << group << " requires unique nonempty value IDs";
       return false;
     }
     selection.name = selection.option;
@@ -81,33 +175,62 @@ bool OptionGroupConfig::Load(Config* config, const string& group) {
       selection.label = selection.option;
     if (group == "input_types" && entry->HasKey("name")) {
       auto name = entry->GetValue("name");
-      if (!name || !name->GetString(&selection.name) ||
-          selection.name.empty()) {
-        LOG(ERROR) << group << " name must be a nonempty prism name";
+      if (!name || !name->GetString(&selection.name) || selection.name.empty())
         return false;
-      }
     }
     options.push_back(std::move(selection));
   }
-  return true;
+  if (mode == kBoolean &&
+      (options.size() != 2 || !Contains("true") || !Contains("false")))
+    return false;
+  if (default_item) {
+    if (mode == kMultiple) {
+      auto values = As<ConfigList>(default_item);
+      if (!values)
+        return false;
+      for (const auto& item : *values) {
+        auto value = As<ConfigValue>(item);
+        if (!value)
+          return false;
+        defaults.push_back(value->str());
+      }
+    } else {
+      auto value = As<ConfigValue>(default_item);
+      if (!value)
+        return false;
+      defaults.push_back(value->str());
+    }
+  } else if (mode == kBoolean) {
+    defaults.push_back("false");
+  } else if (mode == kSingle) {
+    defaults.push_back(options.front().option);
+  }
+  return Normalize(&defaults);
 }
 
-bool OptionGroupConfig::LoadGroups(Config* config,
-                                   map<string, OptionGroupConfig>* groups) {
+bool SettingGroupConfig::LoadGroups(Config* config,
+                                    map<string, SettingGroupConfig>* groups) {
   groups->clear();
-  set<string> options;
-  for (const string group : {"input_types", "aux_types"}) {
-    OptionGroupConfig types;
-    if (!types.Load(config, group))
+  if (!config)
+    return false;
+  set<string> names{"input_types", "aux_types"};
+  if (!config->IsNull("runtime_settings")) {
+    auto definitions = config->GetMap("runtime_settings");
+    if (!definitions)
       return false;
-    for (const auto& item : types.options) {
-      if (!options.insert(item.option).second) {
-        LOG(ERROR) << "option belongs to multiple type groups: " << item.option;
+    for (const auto& entry : *definitions) {
+      if (!ValidId(entry.first) || !names.insert(entry.first).second)
         return false;
-      }
     }
-    if (!types.options.empty())
-      groups->emplace(group, std::move(types));
+  }
+  for (const auto& group : names) {
+    SettingGroupConfig setting;
+    if (!setting.Load(config, group)) {
+      LOG(ERROR) << "invalid runtime setting: " << group;
+      return false;
+    }
+    if (!setting.options.empty())
+      groups->emplace(group, std::move(setting));
   }
   return true;
 }
@@ -134,7 +257,7 @@ bool PrismConfig::Load(Config* schema, const string& name_space) {
   if (!settings->HasKey("prisms"))
     return true;
   if (auto reference = settings->GetValue("prisms")) {
-    InputTypesConfig types;
+    SettingGroupConfig types;
     if (reference->str() != "input_types" || !types.Load(schema) ||
         types.options.empty()) {
       LOG(ERROR) << name_space
@@ -197,7 +320,7 @@ bool ValidatePrismReferences(Config* schema,
         }
         if (auto aux = map->GetValue("aux")) {
           if (aux->str() == "aux_types") {
-            OptionGroupConfig types;
+            SettingGroupConfig types;
             if (!types.Load(schema, "aux_types") || types.options.empty()) {
               LOG(ERROR) << path << "/aux requires a nonempty aux_types group";
               return false;
@@ -234,8 +357,8 @@ bool ValidatePrismReferences(Config* schema,
 }  // namespace
 
 bool PrismConfig::ValidateReferences(Config* config) {
-  map<string, OptionGroupConfig> groups;
-  return config && OptionGroupConfig::LoadGroups(config, &groups) &&
+  map<string, SettingGroupConfig> groups;
+  return config && SettingGroupConfig::LoadGroups(config, &groups) &&
          ValidatePrismReferences(config, config->GetItem(""), "");
 }
 

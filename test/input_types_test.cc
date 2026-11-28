@@ -41,20 +41,20 @@ input_types:
 };
 
 TEST_F(InputTypesTest, DefaultsToFirstInputType) {
-  EXPECT_FALSE(engine_->context()->get_option("pinyin"));
-  EXPECT_TRUE(engine_->context()->get_option("zrm"));
+  EXPECT_FALSE(engine_->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_TRUE(engine_->context()->setting_selected("input_types", "zrm"));
 }
 
 TEST_F(InputTypesTest, SelectingInputTypeClearsOtherTypes) {
-  engine_->context()->set_option("pinyin", true);
+  ASSERT_TRUE(engine_->SelectSetting("input_types", {"pinyin"}));
 
-  EXPECT_TRUE(engine_->context()->get_option("pinyin"));
-  EXPECT_FALSE(engine_->context()->get_option("zrm"));
+  EXPECT_TRUE(engine_->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_FALSE(engine_->context()->setting_selected("input_types", "zrm"));
 
-  engine_->context()->set_option("zrm", true);
+  ASSERT_TRUE(engine_->SelectSetting("input_types", {"zrm"}));
 
-  EXPECT_FALSE(engine_->context()->get_option("pinyin"));
-  EXPECT_TRUE(engine_->context()->get_option("zrm"));
+  EXPECT_FALSE(engine_->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_TRUE(engine_->context()->setting_selected("input_types", "zrm"));
 }
 
 class InputTypeQueryCounter : public Translator {
@@ -84,10 +84,10 @@ TEST_F(InputTypesTest, SwitchingRecomposesOnceAfterTheRadioGroupSettles) {
   engine_->ApplySchema(schema);
   engine_->context()->set_input("ni");
   InputTypeQueryCounter::queries = 0;
-  engine_->context()->set_option("pinyin", true);
+  ASSERT_TRUE(engine_->SelectSetting("input_types", {"pinyin"}));
   EXPECT_EQ(1u, InputTypeQueryCounter::queries);
-  EXPECT_TRUE(engine_->context()->get_option("pinyin"));
-  EXPECT_FALSE(engine_->context()->get_option("zrm"));
+  EXPECT_TRUE(engine_->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_FALSE(engine_->context()->setting_selected("input_types", "zrm"));
   engine_.reset();
   registry.Unregister("input_type_counter");
 }
@@ -117,19 +117,19 @@ switches:
   the<Engine> engine(Engine::Create());
   engine->ApplySchema(schema());
   auto* context = engine->context();
-  EXPECT_TRUE(context->get_option("pinyin"));
-  EXPECT_TRUE(context->get_option("aux_wanxiang"));
+  EXPECT_TRUE(context->setting_selected("input_types", "pinyin"));
+  EXPECT_TRUE(context->setting_selected("aux_types", "aux_wanxiang"));
   EXPECT_TRUE(context->get_option("test_toggle"));
   EXPECT_FALSE(context->get_option("test_radio_a"));
   EXPECT_TRUE(context->get_option("test_radio_b"));
-  context->set_option("zrm", true);
-  context->set_option("aux_zrm", true);
+  ASSERT_TRUE(engine->SelectSetting("input_types", {"zrm"}));
+  ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_zrm"}));
   context->set_option("test_toggle", false);
   context->set_option("test_radio_a", true);
   context->set_option("test_radio_b", false);
   engine->ApplySchema(schema());
-  EXPECT_TRUE(context->get_option("zrm"));
-  EXPECT_TRUE(context->get_option("aux_zrm"));
+  EXPECT_TRUE(context->setting_selected("input_types", "zrm"));
+  EXPECT_TRUE(context->setting_selected("aux_types", "aux_zrm"));
   EXPECT_TRUE(context->get_option("test_toggle"));
   EXPECT_FALSE(context->get_option("test_radio_a"));
   EXPECT_TRUE(context->get_option("test_radio_b"));
@@ -150,8 +150,9 @@ TEST(TypeGroupsTest, RemovedChoiceFallsBackToFirstOption) {
   ASSERT_TRUE(config->LoadFromStream(data));
   the<Engine> engine(Engine::Create());
   engine->ApplySchema(new Schema(id, config));
-  EXPECT_TRUE(engine->context()->get_option("pinyin"));
-  EXPECT_EQ("pinyin", user->GetValue(path)->str());
+  EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+  // Restoring a default does not save until the user explicitly selects it.
+  EXPECT_EQ("zrm", user->GetValue(path)->str());
   ASSERT_TRUE(user->SetItem(path, nullptr));
   EXPECT_TRUE(user->Save());
 }
@@ -235,24 +236,74 @@ aux_types: [{option: aux_wanxiang}, {option: aux_zrm}]
   {
     the<Engine> engine(Engine::Create());
     engine->ApplySchema(schema());
-    EXPECT_TRUE(engine->context()->get_option("pinyin"));
-    EXPECT_TRUE(engine->context()->get_option("aux_wanxiang"));
-    engine->context()->set_option("flypy", true);
-    engine->context()->set_option("aux_zrm", true);
-    EXPECT_TRUE(engine->context()->get_option("flypy"));
-    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
-    EXPECT_FALSE(engine->context()->get_option("aux_wanxiang"));
+    EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+    EXPECT_TRUE(
+        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"flypy"}));
+    ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_zrm"}));
+    EXPECT_TRUE(engine->context()->setting_selected("input_types", "flypy"));
+    EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
+    EXPECT_FALSE(
+        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
   }
   {
     the<Engine> engine(Engine::Create());
     engine->ApplySchema(schema());
-    EXPECT_TRUE(engine->context()->get_option("flypy"));
-    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
-    EXPECT_FALSE(engine->context()->get_option("pinyin"));
-    EXPECT_FALSE(engine->context()->get_option("aux_wanxiang"));
-    engine->context()->set_option("aux_zrm", false);
-    EXPECT_TRUE(engine->context()->get_option("aux_zrm"));
+    EXPECT_TRUE(engine->context()->setting_selected("input_types", "flypy"));
+    EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
+    EXPECT_FALSE(engine->context()->setting_selected("input_types", "pinyin"));
+    EXPECT_FALSE(
+        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
+    EXPECT_FALSE(engine->SelectSetting("aux_types", {}));
+    EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
   }
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  EXPECT_TRUE(user->Save());
+}
+TEST(TypeGroupsTest, TypedSettingsPersistValuesNotOptions) {
+  const string id = "typed_settings_test";
+  const string path = "var/type_groups/" + id;
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  ASSERT_TRUE(user->SetItem(path, nullptr));
+  auto make_schema = [&]() {
+    auto config = new Config;
+    std::istringstream data(R"YAML(
+input_types: [{id: pinyin}, {id: zrm}]
+runtime_settings:
+  feature:
+    mode: boolean
+    default: true
+  categories:
+    mode: multiple
+    values: [{id: a}, {id: b}, {id: c}]
+    default: [a]
+)YAML");
+    EXPECT_TRUE(config->LoadFromStream(data));
+    return new Schema(id, config);
+  };
+  the<Engine> engine(Engine::Create());
+  engine->ApplySchema(make_schema());
+  auto* ctx = engine->context();
+  EXPECT_TRUE(ctx->setting_selected("feature", "true"));
+  EXPECT_TRUE(ctx->setting_selected("categories", "a"));
+  EXPECT_FALSE(ctx->get_option("pinyin"));
+  ctx->set_option("zrm", true);
+  EXPECT_TRUE(ctx->setting_selected("input_types", "pinyin"));
+  ASSERT_TRUE(engine->SelectSetting("input_types", {"zrm"}));
+  ASSERT_TRUE(engine->SelectSetting("feature", {"false"}));
+  ASSERT_TRUE(engine->SelectSetting("categories", {"b", "a"}));
+  EXPECT_FALSE(engine->SelectSetting("categories", {"unknown"}));
+  EXPECT_FALSE(engine->SelectSetting("categories", {"a", "a"}));
+  EXPECT_FALSE(engine->SelectSetting("input_types", {"zrm", "pinyin"}));
+  EXPECT_EQ((vector<string>{"a", "b"}), ctx->setting_values("categories"));
+  ASSERT_TRUE(engine->SelectSetting("categories", {}));
+  engine->ApplySchema(make_schema());
+  EXPECT_TRUE(ctx->setting_selected("input_types", "zrm"));
+  EXPECT_TRUE(ctx->setting_selected("feature", "false"));
+  EXPECT_TRUE(ctx->setting_values("categories").empty());
+  auto saved = user->GetList(path + "/categories");
+  ASSERT_TRUE(saved);
+  EXPECT_TRUE(saved->empty());
   ASSERT_TRUE(user->SetItem(path, nullptr));
   EXPECT_TRUE(user->Save());
 }

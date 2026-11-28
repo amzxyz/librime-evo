@@ -193,7 +193,9 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
         prism_config_.follows_input_types ? nullptr
                                           : &prism_config_.selections.front();
     for (const auto& selection : prism_config_.selections) {
-      if (context->get_option(selection.option)) {
+      if (prism_config_.follows_input_types
+              ? context->setting_selected("input_types", selection.option)
+              : context->get_option(selection.option)) {
         selected = &selection;
         break;
       }

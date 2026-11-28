@@ -630,14 +630,14 @@ rules:
   the<Engine> engine(Engine::Create());
   engine->ApplySchema(new Schema("aux_group_switch_test", config.release()));
   auto* context = engine->context();
-  context->set_option("aux_path_test", true);
+  ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_path_test"}));
   context->set_input("ni::z");
   ASSERT_TRUE(context->GetSelectedCandidate());
   EXPECT_EQ("逆", context->GetSelectedCandidate()->text());
-  context->set_option("aux_path_other", true);
+  ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_path_other"}));
   ASSERT_TRUE(context->GetSelectedCandidate());
   EXPECT_EQ("你", context->GetSelectedCandidate()->text());
-  context->set_option("aux_path_test", true);
+  ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_path_test"}));
   ASSERT_TRUE(context->GetSelectedCandidate());
   EXPECT_EQ("逆", context->GetSelectedCandidate()->text());
 }

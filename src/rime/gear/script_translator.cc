@@ -568,7 +568,7 @@ bool ScriptTranslator::LoadAuxiliaryMatcher() {
   if (selected == "aux_types") {
     selected.clear();
     for (const auto& item : auxiliary_types_.options) {
-      if (engine_->context()->get_option(item.option)) {
+      if (engine_->context()->setting_selected("aux_types", item.option)) {
         selected = item.name;
         break;
       }

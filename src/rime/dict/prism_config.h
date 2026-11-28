@@ -9,7 +9,6 @@
 namespace rime {
 
 class Config;
-class Context;
 
 struct PrismConfig {
   struct Selection {
@@ -26,24 +25,26 @@ struct PrismConfig {
   bool follows_input_types = false;
 };
 
-struct OptionGroupConfig {
+struct SettingGroupConfig {
+  enum Mode { kBoolean = 0, kSingle = 1, kMultiple = 2 };
+
   RIME_DLL bool Load(Config* config, const string& group = "input_types");
   RIME_DLL static bool LoadGroups(Config* config,
-                                  map<string, OptionGroupConfig>* groups);
-  RIME_DLL bool Contains(const string& option) const;
-  RIME_DLL string InitialOption(const Context* context) const;
-  RIME_DLL string RestoreChoice(Config* user,
-                                const string& schema,
-                                const string& group) const;
-  RIME_DLL static bool SaveChoice(Config* user,
-                                  const string& schema,
-                                  const string& group,
-                                  const string& option);
+                                  map<string, SettingGroupConfig>* groups);
+  RIME_DLL bool Contains(const string& value) const;
+  RIME_DLL bool Normalize(vector<string>* values) const;
+  RIME_DLL vector<string> RestoreValues(Config* user,
+                                        const string& schema,
+                                        const string& group) const;
+  RIME_DLL bool SaveValues(Config* user,
+                           const string& schema,
+                           const string& group,
+                           vector<string> values) const;
 
+  Mode mode = kSingle;
   vector<PrismConfig::Selection> options;
+  vector<string> defaults;
 };
-
-using InputTypesConfig = OptionGroupConfig;
 
 }  // namespace rime
 

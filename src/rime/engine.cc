@@ -109,12 +109,12 @@ class ConcreteEngine : public Engine {
   virtual void Compose(Context* ctx);
   void GetCodeChoices(vector<CodeChoice>* result) override;
   bool SelectConfiguredSwitch(const string& option, bool value);
+  bool SelectConfiguredSetting(const string& group, vector<string> values);
 
  protected:
   bool ProcessKey(const KeyEvent& key_event, bool synthetic);
   void InitializeComponents();
   void InitializeOptions();
-  bool IsTypeOption(const string& option) const;
   void RefreshOptionComponents(Context* ctx);
   void NotifyOption(Context* ctx, const string& option);
   void CalculateSegmentation(Segmentation* segments);
@@ -126,8 +126,6 @@ class ConcreteEngine : public Engine {
   void OnOptionUpdate(Context* ctx, const string& option);
   void OnPropertyUpdate(Context* ctx, const string& property);
   void InitializeTypeGroups();
-  void EnforceTypeOption(Context* ctx, const string& option);
-  void SaveTypeChoice(const string& group, const string& option);
 
   vector<ComponentEntry<Processor>> processors_;
   vector<ComponentEntry<Segmentor>> segmentors_;
@@ -136,8 +134,7 @@ class ConcreteEngine : public Engine {
   vector<of<Formatter>> formatters_;
   vector<of<Processor>> post_processors_;
   an<Switcher> switcher_;
-  map<string, OptionGroupConfig> type_groups_;
-  bool enforcing_type_group_ = false;
+  map<string, SettingGroupConfig> type_groups_;
   bool applying_switch_ = false;
   set<string> schema_switches_;
 };
@@ -151,6 +148,11 @@ Engine* Engine::Create() {
 bool Engine::SelectSwitch(const string& option, bool value) {
   auto* engine = dynamic_cast<ConcreteEngine*>(this);
   return engine && engine->SelectConfiguredSwitch(option, value);
+}
+
+bool Engine::SelectSetting(const string& group, vector<string> values) {
+  auto* engine = dynamic_cast<ConcreteEngine*>(this);
+  return engine && engine->SelectConfiguredSetting(group, std::move(values));
 }
 
 Engine::Engine() : schema_(new Schema), context_(new Context) {}
@@ -237,68 +239,39 @@ void ConcreteEngine::NotifyOption(Context* ctx, const string& option) {
 void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
   if (!ctx || applying_switch_)
     return;
-  EnforceTypeOption(ctx, option);
   LOG(INFO) << "updated option: " << option;
-  // Recompose after all members of an exclusive group have settled.
-  if (!enforcing_type_group_)
-    RefreshOptionComponents(ctx);
+  RefreshOptionComponents(ctx);
   NotifyOption(ctx, option);
 }
 
-void ConcreteEngine::SaveTypeChoice(const string& group, const string& option) {
-  auto* config = switcher_ ? switcher_->user_config() : nullptr;
-  if (option.empty())
-    return;
-  const auto& schema = schema_->schema_id();
-  if (!OptionGroupConfig::SaveChoice(config, schema, group, option))
-    LOG(ERROR) << "cannot save type choice: " << group;
-}
-
 void ConcreteEngine::InitializeTypeGroups() {
-  enforcing_type_group_ = true;
-  for (const auto& [group, types] : type_groups_) {
-    for (const auto& item : types.options)
-      context_->set_option(item.option, false);
-  }
+  context_->ClearSettings();
   type_groups_.clear();
-  if (OptionGroupConfig::LoadGroups(schema_->config(), &type_groups_)) {
-    auto* config = switcher_ ? switcher_->user_config() : nullptr;
-    for (const auto& [group, types] : type_groups_) {
-      const string selected =
-          types.RestoreChoice(config, schema_->schema_id(), group);
-      for (const auto& item : types.options)
-        context_->set_option(item.option, item.option == selected);
-      SaveTypeChoice(group, selected);
-    }
-  } else {
+  if (!SettingGroupConfig::LoadGroups(schema_->config(), &type_groups_)) {
     type_groups_.clear();
+    return;
   }
-  enforcing_type_group_ = false;
+  auto* user = switcher_ ? switcher_->user_config() : nullptr;
+  for (const auto& [group, setting] : type_groups_) {
+    context_->SetSettingValues(
+        group, setting.RestoreValues(user, schema_->schema_id(), group));
+  }
 }
 
-void ConcreteEngine::EnforceTypeOption(Context* ctx, const string& option) {
-  if (enforcing_type_group_ || !ctx)
-    return;
-  for (const auto& [group, types] : type_groups_) {
-    if (!types.Contains(option))
-      continue;
-    enforcing_type_group_ = true;
-    if (ctx->get_option(option)) {
-      for (const auto& other : types.options) {
-        if (other.option != option && ctx->get_option(other.option))
-          ctx->set_option(other.option, false);
-      }
-      SaveTypeChoice(group, option);
-    } else {
-      bool active = false;
-      for (const auto& other : types.options)
-        active = active || ctx->get_option(other.option);
-      if (!active)
-        ctx->set_option(option, true);
-    }
-    enforcing_type_group_ = false;
-    return;
+bool ConcreteEngine::SelectConfiguredSetting(const string& group,
+                                             vector<string> values) {
+  auto found = type_groups_.find(group);
+  if (found == type_groups_.end() || !found->second.Normalize(&values))
+    return false;
+  auto* user = switcher_ ? switcher_->user_config() : nullptr;
+  if (!found->second.SaveValues(user, schema_->schema_id(), group, values))
+    return false;
+  if (context_->setting_values(group) != values) {
+    context_->SetSettingValues(group, std::move(values));
+    RefreshOptionComponents(context_.get());
+    message_sink_("setting", group);
   }
+  return true;
 }
 
 void ConcreteEngine::OnPropertyUpdate(Context* ctx, const string& property) {
@@ -698,7 +671,7 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
         string aux;
         if (config->GetString(ns + "/aux", &aux)) {
           if (aux == "aux_types") {
-            OptionGroupConfig types;
+            SettingGroupConfig types;
             if (types.Load(config, "aux_types")) {
               for (const auto& type : types.options)
                 auxiliary.insert(type.name);
@@ -910,14 +883,6 @@ bool SaveSwitchValues(Config* user,
 
 }  // namespace
 
-bool ConcreteEngine::IsTypeOption(const string& option) const {
-  for (const auto& [group, types] : type_groups_) {
-    if (types.Contains(option))
-      return true;
-  }
-  return false;
-}
-
 void ConcreteEngine::InitializeOptions() {
   Config* config = schema_->config();
   if (!config)
@@ -930,11 +895,6 @@ void ConcreteEngine::InitializeOptions() {
     if (first.option_index != 0)
       return Switches::kContinue;
     auto members = GetMembers(switches, first);
-    // Type groups have their own exclusive selection and persistence.
-    for (const auto& member : members) {
-      if (IsTypeOption(member.option_name))
-        return Switches::kContinue;
-    }
     bool public_names = true;
     for (const auto& member : members) {
       public_names &= PublicSwitchName(member.option_name);
@@ -988,7 +948,7 @@ void ConcreteEngine::InitializeOptions() {
 }
 
 bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
-  if (!schema_->config() || !PublicSwitchName(option) || IsTypeOption(option))
+  if (!schema_->config() || !PublicSwitchName(option))
     return false;
   Switches switches(schema_->config());
   auto selected = switches.OptionByName(option);
@@ -996,8 +956,7 @@ bool ConcreteEngine::SelectConfiguredSwitch(const string& option, bool value) {
     return false;
   const auto members = GetMembers(switches, selected);
   for (const auto& member : members) {
-    if (!PublicSwitchName(member.option_name) ||
-        IsTypeOption(member.option_name))
+    if (!PublicSwitchName(member.option_name))
       return false;
   }
   const bool radio = selected.type == Switches::kRadioGroup;

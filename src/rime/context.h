@@ -80,6 +80,24 @@ class RIME_DLL Context {
   bool get_option(const string& name) const;
   void set_property(const string& name, const string& value);
   string get_property(const string& name) const;
+  // Schema-owned settings are values, not synthetic boolean options.
+  const vector<string>& setting_values(const string& group) const {
+    static const vector<string> empty;
+    auto found = settings_.find(group);
+    return found == settings_.end() ? empty : found->second;
+  }
+  bool setting_selected(const string& group, const string& value) const {
+    for (const auto& selected : setting_values(group)) {
+      if (selected == value)
+        return true;
+    }
+    return false;
+  }
+  void SetSettingValues(const string& group, vector<string> values) {
+    settings_[group] = std::move(values);
+  }
+  void ClearSettings() { settings_.clear(); }
+
   const map<string, bool>& options() const { return options_; }
   const map<string, string>& properties() const { return properties_; }
   // options and properties starting with '_' are local to schema;
@@ -113,6 +131,7 @@ class RIME_DLL Context {
   Composition composition_;
   CommitHistory commit_history_;
   map<string, bool> options_;
+  map<string, vector<string>> settings_;
   map<string, string> properties_;
 
   Notifier commit_notifier_;

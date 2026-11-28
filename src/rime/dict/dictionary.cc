@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <rime/algo/syllabifier.h>
 #include <rime/common.h>
+#include <rime/context.h>
 #include <rime/dict/dictionary.h>
 #include <rime/dict/prism_config.h>
 #include <rime/engine.h>
@@ -921,11 +922,14 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
   if (!prism_config.selections.empty()) {
     prism_name = prism_config.selections.front().name;
     if (prism_config.follows_input_types) {
-      InputTypesConfig types;
+      SettingGroupConfig types;
       if (!types.Load(config))
         return nullptr;
-      const string initial = types.InitialOption(
-          ticket.engine ? ticket.engine->context() : nullptr);
+      const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
+      const auto& values =
+          context ? context->setting_values("input_types") : types.defaults;
+      const string initial =
+          values.empty() ? types.defaults.front() : values.front();
       for (const auto& selection : prism_config.selections) {
         if (selection.option == initial)
           prism_name = selection.name;

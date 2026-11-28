@@ -3,6 +3,8 @@
 
 #include "rime_api.h"
 
+#include <algorithm>
+
 #include <rime/common.h>
 #include <rime/composition.h>
 #include <rime/config.h>
@@ -1089,13 +1091,13 @@ static void RimeFreeCodeChoices(RimeCodeChoice* choices, size_t count) {
 
 static bool LoadTypeGroup(const char* schema_id,
                           const char* group,
-                          OptionGroupConfig* types) {
+                          SettingGroupConfig* types) {
   if (!schema_id || !group || !safe_path::ValidRelativeName(schema_id) ||
-      (string(group) != "input_types" && string(group) != "aux_types"))
+      !safe_path::ValidRelativeName(group))
     return false;
   Schema schema(schema_id);
-  map<string, OptionGroupConfig> groups;
-  if (!OptionGroupConfig::LoadGroups(schema.config(), &groups))
+  map<string, SettingGroupConfig> groups;
+  if (!SettingGroupConfig::LoadGroups(schema.config(), &groups))
     return false;
   auto found = groups.find(group);
   if (found == groups.end())
@@ -1104,27 +1106,28 @@ static bool LoadTypeGroup(const char* schema_id,
   return true;
 }
 
-static string ResolveTypeOption(RimeSessionId session_id,
-                                const char* schema_id,
-                                const char* group,
-                                const OptionGroupConfig& types) {
-  string selected;
+static vector<string> ResolveSettingValues(RimeSessionId session_id,
+                                           const char* schema_id,
+                                           const char* group,
+                                           const SettingGroupConfig& setting) {
   auto session = Service::instance().GetSession(session_id);
   if (session && session->schema() && session->context() &&
       session->schema()->schema_id() == schema_id) {
-    for (const auto& item : types.options) {
-      if (session->context()->get_option(item.option)) {
-        selected = item.option;
-        break;
-      }
-    }
+    auto values = session->context()->setting_values(group);
+    if (setting.Normalize(&values))
+      return values;
   }
-  if (selected.empty()) {
-    auto component = Config::Require("user_config");
-    the<Config> user(component ? component->Create("user") : nullptr);
-    selected = types.RestoreChoice(user.get(), schema_id, group);
-  }
-  return selected;
+  auto component = Config::Require("user_config");
+  the<Config> user(component ? component->Create("user") : nullptr);
+  return setting.RestoreValues(user.get(), schema_id, group);
+}
+
+static string ResolveTypeOption(RimeSessionId session_id,
+                                const char* schema_id,
+                                const char* group,
+                                const SettingGroupConfig& setting) {
+  auto values = ResolveSettingValues(session_id, schema_id, group, setting);
+  return values.empty() ? string() : values.front();
 }
 
 static Bool RimeGetTypeOption(RimeSessionId session_id,
@@ -1132,8 +1135,9 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
                               const char* group,
                               char* option,
                               size_t buffer_size) {
-  OptionGroupConfig types;
-  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types))
+  SettingGroupConfig types;
+  if (!option || !buffer_size || !LoadTypeGroup(schema_id, group, &types) ||
+      types.mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
       ResolveTypeOption(session_id, schema_id, group, types);
@@ -1153,8 +1157,9 @@ static Bool RimeGetTypeOptions(RimeSessionId session_id,
     return False;
   *options = nullptr;
   *count = 0;
-  OptionGroupConfig types;
-  if (!LoadTypeGroup(schema_id, group, &types))
+  SettingGroupConfig types;
+  if (!LoadTypeGroup(schema_id, group, &types) ||
+      types.mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
       ResolveTypeOption(session_id, schema_id, group, types);
@@ -1179,25 +1184,80 @@ static void RimeFreeTypeOptions(RimeTypeOption* options, size_t count) {
   delete[] options;
 }
 
+static Bool RimeSelectSetting(RimeSessionId session_id,
+                              const char* schema_id,
+                              const char* group,
+                              const char* const* values,
+                              size_t count) {
+  SettingGroupConfig setting;
+  if ((count && !values) || !LoadTypeGroup(schema_id, group, &setting) ||
+      count > setting.options.size())
+    return False;
+  vector<string> selected;
+  for (size_t i = 0; i < count; ++i) {
+    if (!values[i])
+      return False;
+    selected.emplace_back(values[i]);
+  }
+  if (!setting.Normalize(&selected))
+    return False;
+  auto session = Service::instance().GetSession(session_id);
+  if (session && session->schema() && session->engine() &&
+      session->schema()->schema_id() == schema_id)
+    return Bool(session->engine()->SelectSetting(group, std::move(selected)));
+  auto component = Config::Require("user_config");
+  the<Config> user(component ? component->Create("user") : nullptr);
+  return Bool(
+      setting.SaveValues(user.get(), schema_id, group, std::move(selected)));
+}
+
 static Bool RimeSelectTypeOption(RimeSessionId session_id,
                                  const char* schema_id,
                                  const char* group,
                                  const char* option) {
-  OptionGroupConfig types;
-  if (!option || !LoadTypeGroup(schema_id, group, &types) ||
-      !types.Contains(option))
+  SettingGroupConfig setting;
+  if (!option || !LoadTypeGroup(schema_id, group, &setting) ||
+      setting.mode != SettingGroupConfig::kSingle)
     return False;
-  auto component = Config::Require("user_config");
-  the<Config> user(component ? component->Create("user") : nullptr);
-  if (!OptionGroupConfig::SaveChoice(user.get(), schema_id, group, option))
+  return RimeSelectSetting(session_id, schema_id, group, &option, 1);
+}
+
+static Bool RimeGetSetting(RimeSessionId session_id,
+                           const char* schema_id,
+                           const char* group,
+                           RimeSettingMode* mode,
+                           RimeSettingValue** values,
+                           size_t* count) {
+  if (!mode || !values || !count)
     return False;
-  auto session = Service::instance().GetSession(session_id);
-  if (session && session->schema() && session->context() &&
-      session->schema()->schema_id() == schema_id) {
-    session->context()->set_option(option, true);
-    return Bool(session->context()->get_option(option));
+  *values = nullptr;
+  *count = 0;
+  SettingGroupConfig setting;
+  if (!LoadTypeGroup(schema_id, group, &setting))
+    return False;
+  const auto selected =
+      ResolveSettingValues(session_id, schema_id, group, setting);
+  *mode = static_cast<RimeSettingMode>(setting.mode);
+  auto* items = new RimeSettingValue[setting.options.size()]{};
+  for (size_t i = 0; i < setting.options.size(); ++i) {
+    const auto& item = setting.options[i];
+    items[i] = {dup_string(item.option), dup_string(item.label),
+                Bool(std::find(selected.begin(), selected.end(), item.option) !=
+                     selected.end())};
   }
+  *values = items;
+  *count = setting.options.size();
   return True;
+}
+
+static void RimeFreeSettingValues(RimeSettingValue* values, size_t count) {
+  if (!values)
+    return;
+  for (size_t i = 0; i < count; ++i) {
+    delete[] values[i].value;
+    delete[] values[i].label;
+  }
+  delete[] values;
 }
 
 static Bool RimeSelectCodeChoice(RimeSessionId session_id,
@@ -1348,6 +1408,23 @@ static void CopyStringList(const Container& values, RimeStringList* list) {
     list->list[list->size] = dup_string(value);
     ++list->size;
   }
+}
+
+static Bool RimeGetSettings(const char* schema_id, RimeStringList* groups) {
+  if (!groups)
+    return False;
+  *groups = {};
+  if (!schema_id || !safe_path::ValidRelativeName(schema_id))
+    return False;
+  Schema schema(schema_id);
+  map<string, SettingGroupConfig> settings;
+  if (!SettingGroupConfig::LoadGroups(schema.config(), &settings))
+    return False;
+  vector<string> names;
+  for (const auto& entry : settings)
+    names.push_back(entry.first);
+  CopyStringList(names, groups);
+  return True;
 }
 
 static void RimeFreeDeploymentResult(RimeDeploymentResult* result) {
@@ -1620,6 +1697,10 @@ RIME_API RIME_FLAVORED(RimeApi) * RIME_FLAVORED(rime_get_api)() {
     s_api.release_prewarm = &RimeReleasePrewarm;
     s_api.deployment_has_other_failure = &RimeDeploymentHasOtherFailure;
     s_api.select_switch = &RimeSelectSwitch;
+    s_api.get_settings = &RimeGetSettings;
+    s_api.get_setting = &RimeGetSetting;
+    s_api.free_setting_values = &RimeFreeSettingValues;
+    s_api.select_setting = &RimeSelectSetting;
   }
   return &s_api;
 }

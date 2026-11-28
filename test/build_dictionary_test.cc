@@ -1286,8 +1286,8 @@ lookup:
 
 TEST_F(RimeBuildDictionaryTest, SharedInputTypesSwitchAllTranslators) {
   WriteSchema(string(kDefinitions) + R"YAML(input_types:
-  - {option: compact, name: zrm}
-  - {option: full, name: pinyin}
+  - {id: compact, name: zrm}
+  - {id: full, name: pinyin}
 lookup:
   dictionary: build_dict_test
   prisms: input_types
@@ -1307,12 +1307,16 @@ independent:
     the<Translator> translator(
         Translator::Require(name)->Create(Ticket(engine.get(), "lookup")));
     ASSERT_TRUE(translator);
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"compact"}));
     EXPECT_EQ("好", Query(translator.get(), "hk"));
     engine->context()->set_option("full", true);
-    EXPECT_FALSE(engine->context()->get_option("compact"));
+    EXPECT_EQ("好", Query(translator.get(), "hk"));
+    engine->context()->set_option("full", false);
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"full"}));
+    EXPECT_FALSE(engine->context()->setting_selected("input_types", "compact"));
     EXPECT_EQ("好", Query(translator.get(), "hao"));
     EXPECT_TRUE(Query(translator.get(), "hk").empty());
-    engine->context()->set_option("compact", true);
+    ASSERT_TRUE(engine->SelectSetting("input_types", {"compact"}));
     EXPECT_EQ("好", Query(translator.get(), "hk"));
   }
 }

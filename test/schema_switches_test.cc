@@ -40,6 +40,8 @@ TEST(SchemaSwitchesTest, IsolatedSelectionAndTemporaryState) {
   auto* ctx = engine->context();
   EXPECT_FALSE(ctx->get_option("scoped_emoji"));
   EXPECT_TRUE(ctx->get_option("scoped_a"));
+  EXPECT_FALSE(engine->SelectSetting("scoped_emoji", {"true"}));
+  EXPECT_FALSE(engine->SelectSetting("scoped_a", {"scoped_b"}));
   EXPECT_TRUE(engine->SelectSwitch("scoped_emoji", true));
   EXPECT_TRUE(engine->SelectSwitch("scoped_b", true));
   EXPECT_TRUE(engine->SelectSwitch("scoped_b", false));

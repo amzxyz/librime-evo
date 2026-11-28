@@ -73,7 +73,7 @@ class ScriptTranslator : public Translator,
   map<string, an<AuxiliaryDb>> auxiliary_databases_;
   string auxiliary_type_;
   string active_auxiliary_type_;
-  OptionGroupConfig auxiliary_types_;
+  SettingGroupConfig auxiliary_types_;
   enum class DirectAuxMode { kOff, kChar, kWord };
   DirectAuxMode direct_aux_mode_ = DirectAuxMode::kOff;
   the<Poet> poet_;

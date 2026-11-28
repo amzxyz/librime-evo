@@ -176,6 +176,7 @@ typedef struct rime_candidate_preview_t {
 #define RIME_EVO_CODE_CHOICES 1
 #define RIME_EVO_TYPE_GROUPS 1
 #define RIME_EVO_TYPE_OPTIONS 1
+#define RIME_EVO_SETTINGS 1
 #define RIME_CANDIDATE_EDIT_ACTIONS 1
 #define RIME_SCHEMA_PREWARM 1
 #define RIME_DEPLOYMENT_FAILURE_SCOPE 1
@@ -194,6 +195,18 @@ typedef struct rime_type_option_t {
   char* label;
   Bool selected;
 } RimeTypeOption;
+
+typedef enum rime_setting_mode_t {
+  kRimeSettingBoolean = 0,
+  kRimeSettingSingle = 1,
+  kRimeSettingMultiple = 2
+} RimeSettingMode;
+
+typedef struct rime_setting_value_t {
+  char* value;
+  char* label;
+  Bool selected;
+} RimeSettingValue;
 
 /*!
  *  Should be initialized by calling RIME_STRUCT_INIT(Type, var);
@@ -604,10 +617,27 @@ typedef struct RIME_FLAVORED(rime_api_t) {
   Bool (*deployment_has_other_failure)(void);
   //! Explicit selection of a declared switch in the active schema. Reset
   //! switches are not saved; radio false is a handled no-op. Returns false
-  //! for undeclared/internal/type-group options. set_option stays temporary.
+  //! for undeclared/internal options. set_option stays temporary.
   Bool (*select_switch)(RimeSessionId session_id,
                         const char* option,
                         Bool value);
+  //! Enumerate schema-owned settings. Free the list with free_string_list.
+  Bool (*get_settings)(const char* schema_id, RimeStringList* groups);
+  //! Enumerate values and effective selection; free with free_setting_values.
+  Bool (*get_setting)(RimeSessionId session_id,
+                      const char* schema_id,
+                      const char* group,
+                      RimeSettingMode* mode,
+                      RimeSettingValue** values,
+                      size_t* count);
+  void (*free_setting_values)(RimeSettingValue* values, size_t count);
+  //! Replace the selection. Boolean/single requires one value; multiple may
+  //! be empty. A zero session ID saves a choice for the next activation.
+  Bool (*select_setting)(RimeSessionId session_id,
+                         const char* schema_id,
+                         const char* group,
+                         const char* const* values,
+                         size_t count);
 } RIME_FLAVORED(RimeApi);
 
 //! API entry
