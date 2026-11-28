@@ -6,17 +6,17 @@ runtime_settings:
     mode: multiple
     default: []
     values:
-      z_zh: "z / zh"
-      c_ch: "c / ch"
-      s_sh: "s / sh"
-      n_l: "n / l"
-      f_h: "f / h"
-      r_y: "r / y"
-      r_l: "r / l"
-      g_k: "g / k"
-      an_ang: "an / ang"
-      en_eng: "en / eng"
-      in_ing: "in / ing"
+      - {value: z_zh, label: "z / zh"}
+      - {value: c_ch, label: "c / ch"}
+      - {value: s_sh, label: "s / sh"}
+      - {value: n_l, label: "n / l"}
+      - {value: f_h, label: "f / h"}
+      - {value: r_y, label: "r / y"}
+      - {value: r_l, label: "r / l"}
+      - {value: g_k, label: "g / k"}
+      - {value: an_ang, label: "an / ang"}
+      - {value: en_eng, label: "en / eng"}
+      - {value: in_ing, label: "in / ing"}
 
 fuzzy_rules:
   - fuzzy/^zh/z/z_zh

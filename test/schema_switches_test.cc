@@ -3,6 +3,8 @@
 #include <rime/config.h>
 #include <rime/context.h>
 #include <rime/engine.h>
+#include <rime/key_event.h>
+#include <rime/candidate.h>
 #include <rime/config/resource_config.h>
 #include <rime/config/runtime_settings.h>
 #include <rime/dict/schema_resource_validation.h>
@@ -46,8 +48,8 @@ runtime_settings:
     default: $pinyin
     fixed: $zrm
     values:
-      $pinyin: Full
-      $zrm: Double
+      - {value: $pinyin, label: Full}
+      - {value: $zrm, label: Double}
 )");
   ASSERT_TRUE(config.LoadFromStream(yaml));
   map<string, SettingGroupConfig> groups;
@@ -61,6 +63,72 @@ runtime_settings:
   EXPECT_FALSE(setting.SaveValues(&user, "test", "input_types", {"pinyin"}));
 }
 
+TEST(SchemaSwitchesTest, RuntimeChoicesRequireValueKey) {
+  Config config;
+  std::istringstream yaml(R"(
+runtime_settings:
+  layout:
+    type: prism
+    mode: single
+    values: [{prism: $pinyin}]
+  auxiliary:
+    type: auxiliary
+    mode: single
+    values: [{aux: $aux}]
+  feature:
+    mode: single
+    values: [{id: off}]
+)");
+  ASSERT_TRUE(config.LoadFromStream(yaml));
+  SettingGroupConfig setting;
+  EXPECT_FALSE(setting.Load(&config, "layout"));
+  EXPECT_FALSE(setting.Load(&config, "auxiliary"));
+  EXPECT_FALSE(setting.Load(&config, "feature"));
+  ASSERT_TRUE(
+      config.SetString("runtime_settings/layout/values/@0/value", "$pinyin"));
+  ASSERT_TRUE(
+      config.SetString("runtime_settings/auxiliary/values/@0/value", "$aux"));
+  ASSERT_TRUE(
+      config.SetString("runtime_settings/feature/values/@0/value", "off"));
+  ASSERT_TRUE(setting.Load(&config, "layout"));
+  EXPECT_EQ((vector<string>{"pinyin"}), setting.defaults);
+  ASSERT_TRUE(setting.Load(&config, "auxiliary"));
+  EXPECT_EQ((vector<string>{"aux"}), setting.defaults);
+  ASSERT_TRUE(setting.Load(&config, "feature"));
+  EXPECT_EQ((vector<string>{"off"}), setting.defaults);
+  ASSERT_TRUE(
+      config.SetString("runtime_settings/layout/values/@0/value", "pinyin"));
+  EXPECT_FALSE(setting.Load(&config, "layout"));
+}
+
+TEST(SchemaSwitchesTest, RuntimeSettingsPreserveChoiceOrder) {
+  Config config;
+  std::istringstream yaml(R"(
+runtime_settings:
+  z_group:
+    mode: single
+    values:
+      - {value: z, label: Z}
+      - {value: a, label: A}
+  a_group:
+    mode: multiple
+    values:
+      - {value: b}
+      - {value: a}
+)");
+  ASSERT_TRUE(config.LoadFromStream(yaml));
+  map<string, SettingGroupConfig> groups;
+  ASSERT_TRUE(SettingGroupConfig::LoadGroups(&config, &groups));
+  EXPECT_EQ((vector<string>{"z"}), groups.at("z_group").defaults);
+  vector<string> selected{"a", "b"};
+  ASSERT_TRUE(groups.at("a_group").Normalize(&selected));
+  EXPECT_EQ((vector<string>{"b", "a"}), selected);
+  ASSERT_TRUE(
+      config.SetString("runtime_settings/z_group/values/@1/value", "z"));
+  EXPECT_FALSE(SettingGroupConfig::LoadGroups(&config, &groups));
+  EXPECT_TRUE(groups.empty());
+}
+
 TEST(SchemaSwitchesTest, FixedSettingPreservesSavedChoice) {
   Config config, user;
   std::istringstream yaml(R"(
@@ -70,8 +138,8 @@ runtime_settings:
     default: full
     fixed: compact
     values:
-      full: Full
-      compact: Compact
+      - {value: full, label: Full}
+      - {value: compact, label: Compact}
 )");
   ASSERT_TRUE(config.LoadFromStream(yaml));
   ASSERT_TRUE(user.SetString("var/type_groups/test/layout", "full"));
@@ -244,6 +312,82 @@ TEST(SchemaSwitchesTest, ResetWithoutLegacyMigration) {
   user->SetItem("var/option/scoped_emoji", nullptr);
   user->SetItem("var/option/scoped_a", nullptr);
   user->SetItem("var/option/scoped_b", nullptr);
+  EXPECT_TRUE(user->Save());
+}
+
+TEST(SchemaSwitchesTest, NativeRuntimeSettingsMenu) {
+  the<Config> defaults(Config::Require("config")->Create("default"));
+  auto old_hotkeys = defaults->GetItem("switcher/hotkeys");
+  auto hotkeys = New<ConfigList>();
+  hotkeys->Append(New<ConfigValue>("Control+grave"));
+  ASSERT_TRUE(defaults->SetItem("switcher/hotkeys", hotkeys));
+  the<Config> user(Config::Require("user_config")->Create("user"));
+  const string path = "var/type_groups/switch_test_menu";
+  user->SetItem(path, nullptr);
+  the<Engine> engine(Engine::Create());
+  defaults->SetItem("switcher/hotkeys", old_hotkeys);
+  auto config = new Config;
+  std::istringstream yaml(R"(
+runtime_settings:
+  a_input:
+    label: Input
+    mode: single
+    default: full
+    values: [{value: full, label: Full}, {value: compact, label: Compact}]
+  b_fuzzy:
+    label: Fuzzy
+    mode: multiple
+    default: []
+    values: [{value: a, label: A}, {value: b, label: B}]
+  c_fixed:
+    label: Fixed
+    mode: boolean
+    fixed: true
+)");
+  ASSERT_TRUE(config->LoadFromStream(yaml));
+  engine->ApplySchema(new Schema("switch_test_menu", config));
+  string committed;
+  engine->sink().connect([&](const string& text) { committed += text; });
+  const KeyEvent hotkey("Control+grave");
+  auto open = [&] {
+    EXPECT_TRUE(engine->ProcessKey(hotkey));
+    EXPECT_NE(engine.get(), engine->active_engine());
+    EXPECT_TRUE(engine->ProcessKey(hotkey));
+    return engine->active_engine()->context();
+  };
+  engine->context()->set_input("abc");
+  engine->context()->set_caret_pos(2);
+  auto* menu = open();
+  ASSERT_TRUE(menu->HasMenu());
+  EXPECT_EQ("Input", menu->GetSelectedCandidate()->text());
+  EXPECT_TRUE(engine->ProcessKey(hotkey));
+  EXPECT_EQ(menu, engine->active_engine()->context());
+  EXPECT_TRUE(menu->Select(0));
+  EXPECT_TRUE(menu->Select(1));  // Declared order, not alphabetical.
+  EXPECT_EQ(engine.get(), engine->active_engine());
+  EXPECT_TRUE(engine->context()->setting_selected("a_input", "compact"));
+  EXPECT_EQ("abc", engine->context()->input());
+  EXPECT_EQ(2u, engine->context()->caret_pos());
+
+  menu = open();
+  EXPECT_TRUE(menu->Select(1));
+  EXPECT_TRUE(menu->Select(0));
+  EXPECT_TRUE(menu->Select(1));
+  EXPECT_EQ((vector<string>{"a", "b"}),
+            engine->context()->setting_values("b_fuzzy"));
+  EXPECT_TRUE(menu->Select(0));
+  EXPECT_TRUE(menu->Select(1));
+  EXPECT_TRUE(engine->context()->setting_values("b_fuzzy").empty());
+  EXPECT_TRUE(menu->Select(2));  // Back to group list.
+  EXPECT_TRUE(menu->Select(2));  // Fixed group.
+  EXPECT_TRUE(menu->Select(0));  // Cannot change fixed value.
+  EXPECT_TRUE(engine->context()->setting_selected("c_fixed", "true"));
+  EXPECT_TRUE(engine->ProcessKey(KeyEvent("Escape")));
+  EXPECT_EQ(engine.get(), engine->active_engine());
+  EXPECT_TRUE(committed.empty());
+  EXPECT_EQ("abc", engine->context()->input());
+  engine->context()->Clear();
+  user->SetItem(path, nullptr);
   EXPECT_TRUE(user->Save());
 }
 

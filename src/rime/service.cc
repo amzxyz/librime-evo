@@ -42,6 +42,10 @@ void Session::ResetCommitText() {
 bool Session::CommitComposition() {
   if (!engine_)
     return false;
+  if (auto* switcher = dynamic_cast<Switcher*>(engine_->active_engine())) {
+    switcher->Deactivate();
+    return false;
+  }
   engine_->context()->Commit();
   return !commit_text_.empty();
 }
@@ -49,6 +53,10 @@ bool Session::CommitComposition() {
 void Session::ClearComposition() {
   if (!engine_)
     return;
+  if (auto* switcher = dynamic_cast<Switcher*>(engine_->active_engine())) {
+    switcher->Deactivate();
+    return;
+  }
   engine_->context()->AbortComposition();
 }
 

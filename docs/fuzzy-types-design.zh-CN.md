@@ -23,8 +23,8 @@ runtime_settings:
     mode: multiple
     default: []
     values:
-      z_zh: "z / zh"
-      an_ang: "an / ang"
+      - {value: z_zh, label: "z / zh"}
+      - {value: an_ang, label: "an / ang"}
 build:
   $example:
     type: dictionary

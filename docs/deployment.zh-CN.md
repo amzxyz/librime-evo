@@ -162,15 +162,15 @@ runtime_settings:
     mode: single
     default: $full
     values:
-      $full: 全拼
-      $double: 双拼
+      - {value: $full, label: 全拼}
+      - {value: $double, label: 双拼}
   aux_types:
     label: 辅助码
     type: auxiliary
     mode: single
     default: $aux_example
     values:
-      $aux_example: 辅助码
+      - {value: $aux_example, label: 辅助码}
 
 translator:
   dictionary: $example
@@ -189,8 +189,8 @@ patch:
   runtime_settings/input_types/fixed: $double
 ```
 
-变量支持 boolean、single、multiple。值域支持映射及列表；映射按键排序，列表保留声明顺序。有效值优先级为 fixed、user.yaml 中合法的用户选择、default。fixed 禁止运行时修改，但不删除已经保存的用户选择。接口 get_settings/get_setting/select_setting 用于枚举和修改变量；get_setting_info 返回显示名称及 fixed 状态。普通 switches 和 option 不受影响。
+变量支持 boolean、single、multiple。分组使用映射，值域使用 value/label 列表并保留声明顺序。type 声明资源类型，不改变选项字段名。有效值优先级为 fixed、user.yaml 中合法的用户选择、default。fixed 禁止运行时修改，但不删除已经保存的用户选择。接口 get_settings/get_setting/select_setting 用于枚举和修改变量；get_setting_info 返回显示名称及 fixed 状态。普通 switches 和 option 不受影响。
 
 模糊音变量是普通多选值域。在词典资源和使用它的翻译器中均使用 `fuzzy: ${fuzzy_types}`，编译时检查规则中的条件 ID，运行时应用选择掩码。直接辅助模式可通过 `direct_aux_mode: ${direct_aux_mode}` 引用单选变量，允许 off、char、word 三个值。未引用变量的普通静态设置保持原行为。
 
-用户词学习模式可通过 `user_dict_mode: ${learning}` 引用值域为 auto、manual、off 的单选变量。该设置仅允许在未组字时切换；切换前结束待提交的学习事务，再重建相关翻译器，不重新部署。
+用户词学习模式可通过 `user_dict_mode: ${learning}` 引用值域为 auto、manual、off 的单选变量。切换前结束待提交的学习事务，再重建相关翻译器并刷新候选，保留原始输入及光标，不重新部署。

@@ -4,11 +4,13 @@
 //
 // 2011-12-07 GONG Chen <chen.sst@gmail.com>
 //
+#include <algorithm>
 #include <rime/candidate.h>
 #include <rime/common.h>
 #include <rime/composition.h>
 #include <rime/config.h>
 #include <rime/context.h>
+#include <rime/config/runtime_settings.h>
 #include <rime/key_event.h>
 #include <rime/menu.h>
 #include <rime/processor.h>
@@ -43,12 +45,17 @@ ProcessResult Switcher::ProcessKeyEvent(const KeyEvent& key_event) {
       if (!active_ && engine_) {
         Activate();
       } else if (active_) {
-        HighlightNextSchema();
+        if (!settings_menu_)
+          RefreshSettingsMenu();
       }
       return kAccepted;
     }
   }
   if (active_) {
+    if (!key_event.release() && key_event.keycode() == XK_Escape) {
+      Deactivate();
+      return kAccepted;
+    }
     for (auto& p : processors_) {
       ProcessResult result = p->ProcessKeyEvent(key_event);
       if (result != kNoop) {
@@ -61,34 +68,121 @@ ProcessResult Switcher::ProcessKeyEvent(const KeyEvent& key_event) {
     int ch = key_event.keycode();
     if (ch == XK_space || ch == XK_Return) {
       context_->ConfirmCurrentSelection();
-    } else if (ch == XK_Escape) {
-      Deactivate();
     }
     return kAccepted;
   }
   return kNoop;
 }
 
-void Switcher::HighlightNextSchema() {
-  Composition& comp = context_->composition();
-  if (comp.empty() || !comp.back().menu)
+namespace {
+class SettingMenuCommand : public SimpleCandidate, public SwitcherCommand {
+ public:
+  SettingMenuCommand(const string& label,
+                     const string& comment,
+                     function<void()> action)
+      : SimpleCandidate("setting", 0, 0, label, comment),
+        SwitcherCommand(""),
+        action_(std::move(action)) {}
+  void Apply(Switcher*) override { action_(); }
+
+ private:
+  function<void()> action_;
+};
+
+string SettingSummary(const SettingGroupConfig& setting,
+                      const Context* context,
+                      const string& group) {
+  string summary;
+  for (const auto& option : setting.options) {
+    if (!context->setting_selected(group, option.value))
+      continue;
+    if (!summary.empty())
+      summary += " / ";
+    summary += option.label;
+  }
+  return summary.empty() ? "—" : summary;
+}
+}  // namespace
+
+void Switcher::RefreshSettingsMenu(string group,
+                                   const string& error,
+                                   size_t highlight) {
+  if (!engine_)
     return;
-  Segment& seg(comp.back());
-  int index = seg.selected_index;
-  an<Candidate> option;
-  do {
-    ++index;  // next
-    int candidate_count = seg.menu->Prepare(index + 1);
-    if (candidate_count <= index) {
-      index = 0;  // passed the end; rewind
-      break;
-    } else {
-      option = seg.GetCandidateAt(index);
+  map<string, SettingGroupConfig> groups;
+  SettingGroupConfig::LoadGroups(engine_->schema()->config(), &groups);
+  settings_menu_ = true;
+  setting_group_ = group;
+  auto translation = New<FifoTranslation>();
+  auto append = [&](const string& label, const string& comment,
+                    function<void()> action) {
+    translation->Append(
+        New<SettingMenuCommand>(label, comment, std::move(action)));
+  };
+  const auto found = groups.find(group);
+  string prompt = "〔" + engine_->schema()->schema_name() + " · 设置〕";
+  if (found == groups.end()) {
+    setting_group_.clear();
+    for (const auto& [id, setting] : groups) {
+      auto label = setting.label.empty() ? id : setting.label;
+      auto summary = SettingSummary(setting, engine_->context(), id);
+      if (setting.fixed)
+        summary += " · 固定";
+      append(label, summary, [this, id] { RefreshSettingsMenu(id); });
     }
-  } while (!option || option->type() != "schema");
-  seg.selected_index = index;
-  seg.tags.insert("paging");
-  return;
+    if (groups.empty())
+      append("无运行时设置", "", [] {});
+  } else {
+    const auto& setting = found->second;
+    prompt = "〔" + (setting.label.empty() ? group : setting.label) + "〕";
+    for (const auto& option : setting.options) {
+      const bool selected =
+          engine_->context()->setting_selected(group, option.value);
+      string comment = selected ? "✓" : "";
+      if (setting.fixed)
+        comment += " 固定";
+      const auto value = option.value;
+      const auto mode = setting.mode;
+      const bool fixed = setting.fixed;
+      append(option.label, comment, [this, group, value, mode, fixed] {
+        const size_t index = context_->composition().back().selected_index;
+        if (fixed) {
+          RefreshSettingsMenu(group, {}, index);
+          return;
+        }
+        auto values = engine_->context()->setting_values(group);
+        if (mode == SettingGroupConfig::kMultiple) {
+          auto it = std::find(values.begin(), values.end(), value);
+          if (it == values.end())
+            values.push_back(value);
+          else
+            values.erase(it);
+        } else {
+          values = {value};
+        }
+        const bool ok = engine_->SelectSetting(group, std::move(values));
+        if (!ok) {
+          RefreshSettingsMenu(group, "设置未生效", index);
+        } else if (mode == SettingGroupConfig::kMultiple) {
+          RefreshSettingsMenu(group, {}, index);
+        } else {
+          Deactivate();
+        }
+      });
+    }
+    append("返回设置", "", [this] { RefreshSettingsMenu(); });
+  }
+  if (!error.empty())
+    prompt += " " + error;
+  auto menu = New<Menu>();
+  menu->AddTranslation(translation);
+  context_->Clear();
+  Segment seg(0, 0);
+  seg.prompt = prompt;
+  seg.menu = menu;
+  const auto count = menu->Prepare(highlight + 1);
+  seg.selected_index = count ? std::min(highlight, count - 1) : 0;
+  context_->composition().AddSegment(seg);
 }
 
 /*
@@ -211,6 +305,10 @@ void Switcher::OnSelect(Context* ctx) {
 }
 
 void Switcher::RefreshMenu() {
+  if (settings_menu_) {
+    RefreshSettingsMenu(setting_group_);
+    return;
+  }
   Composition& comp = context_->composition();
   if (comp.empty()) {
     // no longer need this to make context_->IsComposing() == true
@@ -230,6 +328,8 @@ void Switcher::RefreshMenu() {
 
 void Switcher::Activate() {
   LOG(INFO) << "switcher is activated.";
+  settings_menu_ = false;
+  setting_group_.clear();
   context_->set_option("_fold_options", fold_options_);
   RefreshMenu();
   engine_->set_active_engine(this);
@@ -237,12 +337,16 @@ void Switcher::Activate() {
 }
 
 void Switcher::Deactivate() {
+  settings_menu_ = false;
+  setting_group_.clear();
   active_ = false;
   engine_->set_active_engine();
   context_->Clear();
 }
 
 void Switcher::DeactivateAndApply(function<void()> apply) {
+  settings_menu_ = false;
+  setting_group_.clear();
   active_ = false;
   engine_->set_active_engine();
   apply();

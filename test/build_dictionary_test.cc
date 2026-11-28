@@ -1267,7 +1267,7 @@ TEST_F(RimeBuildDictionaryTest, BuildAllPrismsIndependentlyOfTypeOptions) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
+      - {value: $pinyin}
 lookup:
   dictionary: build_dict_test
   prism: ${input_types}
@@ -1298,8 +1298,8 @@ TEST_F(RimeBuildDictionaryTest, SharedInputTypesSwitchAllTranslators) {
     mode: single
     default: $zrm
     values:
-      - {id: $zrm}
-      - {id: $pinyin}
+      - {value: $zrm}
+      - {value: $pinyin}
 lookup:
   dictionary: build_dict_test
   prism: ${input_types}
@@ -1339,8 +1339,8 @@ TEST_F(RimeBuildDictionaryTest, FuzzyGroupsSwitchAllTranslators) {
     mode: multiple
     default: []
     values:
-      initial: Initial
-      final: Final
+      - {value: initial, label: Initial}
+      - {value: final, label: Final}
 build:
   $build_dict_test:
     type: dictionary
@@ -1385,7 +1385,7 @@ lookup:
 }
 
 TEST_F(RimeBuildDictionaryTest, RejectsInvalidTypeOptions) {
-  for (const char* options : {"[{id: $zrm}, {id: $zrm}]", "[]"}) {
+  for (const char* options : {"[{value: $zrm}, {value: $zrm}]", "[]"}) {
     WriteSchema(string(kDefinitions) +
                 "runtime_settings:\n  input_types:\n"
                 "    type: prism\n    mode: single\n    values: " +
@@ -1404,7 +1404,7 @@ TEST_F(RimeBuildDictionaryTest, IncludedBuildIsIndependentOfPatchedInputTypes) {
     mode: single
     default: $zrm
     values:
-      - {id: $zrm}
+      - {value: $zrm}
 build:
   __include: build_dict_catalog:/build
 lookup:
@@ -1414,7 +1414,7 @@ lookup:
   std::ofstream(schema_id_ + ".custom.yaml") << R"YAML(patch:
   runtime_settings/input_types/default: $pinyin
   runtime_settings/input_types/values:
-    $pinyin: Full
+    - {value: $pinyin, label: Full}
 )YAML";
   SchemaUpdate update(schema_path_);
   const bool deployed = update.Run(&Service::instance().deployer());
@@ -1431,8 +1431,8 @@ TEST_F(RimeBuildDictionaryTest, SharedPrismsArePreloaded) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
-      - {id: $zrm}
+      - {value: $pinyin}
+      - {value: $zrm}
 translator:
   dictionary: build_dict_test
   prism: ${input_types}
@@ -1454,7 +1454,7 @@ TEST_F(RimeBuildDictionaryTest, RejectsMissingPrismDefinition) {
     mode: single
     default: $missing
     values:
-      - {id: $missing}
+      - {value: $missing}
 lookup:
   dictionary: build_dict_test
   prism: ${input_types}
@@ -1492,8 +1492,8 @@ TEST_F(RimeBuildDictionaryTest, SymbolicSettingBindsEachDictionary) {
     mode: single
     default: $pinyin
     values:
-      $pinyin: Full
-      $zrm: Compact
+      - {value: $pinyin, label: Full}
+      - {value: $zrm, label: Compact}
 first:
   dictionary: $build_dict_test
   prism: ${layout}
@@ -1521,15 +1521,15 @@ second:
   EXPECT_EQ("号", Query(second.get(), "hao"));
 }
 
-TEST_F(RimeBuildDictionaryTest, UserDictionaryModeChangesOnlyWhileIdle) {
+TEST_F(RimeBuildDictionaryTest, UserDictionaryModeChangesDuringComposition) {
   WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
   learning:
     mode: single
-    default: 'off'
+    default: off
     values:
-      'off': Off
-      manual: Manual
-      auto: Auto
+      - {value: off, label: Off}
+      - {value: manual, label: Manual}
+      - {value: auto, label: Auto}
 engine:
   segmentors: [abc_segmentor]
   translators: [script_translator]
@@ -1546,10 +1546,8 @@ translator:
   ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
   auto* context = engine->context();
   context->set_input("hao");
-  EXPECT_FALSE(engine->SelectSetting("learning", {"manual"}));
-  EXPECT_TRUE(context->setting_selected("learning", "off"));
-  context->Clear();
   ASSERT_TRUE(engine->SelectSetting("learning", {"manual"}));
+  EXPECT_EQ("hao", context->input());
   EXPECT_TRUE(context->setting_selected("learning", "manual"));
   UserDictionaryConfig config;
   ASSERT_TRUE(UserDictionaryComponent::ResolveConfig(

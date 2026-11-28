@@ -161,18 +161,12 @@ bool SettingGroupConfig::Load(Config* config, const string& group) {
     return true;
   };
   auto choices = definition->Get("values");
-  if (auto values = As<ConfigMap>(choices)) {
-    for (const auto& item : *values) {
-      auto title = As<ConfigValue>(item.second);
-      if (!title || !add_choice(item.first, title->str()))
-        return false;
-    }
-  } else if (auto values = As<ConfigList>(choices)) {
+  if (auto values = As<ConfigList>(choices)) {
     for (const auto& item : *values) {
       auto entry = As<ConfigMap>(item);
-      auto id = entry ? entry->GetValue("id") : nullptr;
+      auto value = entry ? entry->GetValue("value") : nullptr;
       auto title = entry ? entry->GetValue("label") : nullptr;
-      if (!id || !add_choice(id->str(), title ? title->str() : string()))
+      if (!value || !add_choice(value->str(), title ? title->str() : string()))
         return false;
     }
   } else if (mode == kBoolean && !choices) {
@@ -238,15 +232,16 @@ bool SettingGroupConfig::LoadGroups(Config* config,
   auto definitions = config->GetMap("runtime_settings");
   if (!definitions)
     return false;
+  map<string, SettingGroupConfig> loaded;
   for (const auto& entry : *definitions) {
     SettingGroupConfig setting;
     if (!setting.Load(config, entry.first)) {
       LOG(ERROR) << "invalid runtime setting: " << entry.first;
-      groups->clear();
       return false;
     }
-    groups->emplace(entry.first, std::move(setting));
+    loaded.emplace(entry.first, std::move(setting));
   }
+  *groups = std::move(loaded);
   return true;
 }
 

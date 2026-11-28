@@ -49,7 +49,11 @@ class Switcher : public Processor, public Engine {
   void InitializeComponents();
   void LoadSettings();
 
-  void HighlightNextSchema();
+  void RefreshSettingsMenu(string group = {},
+                           const string& error = {},
+                           size_t highlight = 0);
+  bool settings_menu_ = false;
+  string setting_group_;
   void OnSelect(Context* ctx);
 
   the<Config> user_config_;

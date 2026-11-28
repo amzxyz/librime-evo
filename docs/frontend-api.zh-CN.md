@@ -62,17 +62,17 @@ runtime_settings:
     mode: single
     default: $pinyin
     values:
-      $pinyin: 全拼
-      $zrm: 自然码
+      - {value: $pinyin, label: 全拼}
+      - {value: $zrm, label: 自然码}
   feature:
     mode: boolean
     default: false
   categories:
     mode: multiple
-    values: [{id: a, label: A}, {id: b, label: B}]
+    values: [{value: a, label: A}, {value: b, label: B}]
     default: []
 ```
 
-`get_settings` 枚举组 ID，`get_setting` 返回模式及所有值（含 label、selected），`select_setting` 校验并整组替换选中值列表。boolean 使用 true/false 字符串值传递，持久化为 YAML bool；single 保存单个 ID；multiple 保存列表，空列表是有效选择。内核按 schema 保存至 var/type_groups/<schema>/<group>，不会修改方案配置。自定义组由相应组件读取 Context::setting_values/setting_selected；声明本身不会自动改变任意组件行为。切换后当前会话刷新候选，通知 setting/group。现有单选 C ABI 槽位委托至新接口，set_option 不再切换类型组。普通 `switches` 不属于该 API。`get_option` / `set_option` 保留原有布尔运行时接口与通知机制；Evo 的主动选择记忆继续由 `select_switch` 和方案 `reset` 定义，不依赖 default.yaml 白名单。
+`get_settings` 枚举组 ID，`get_setting` 返回模式及所有值（含 label、selected），`select_setting` 校验并整组替换选中值列表。boolean 使用 true/false 字符串值传递，持久化为 YAML bool；single 保存单个值；multiple 保存列表，空列表是有效选择。内核按 schema 保存至 var/type_groups/<schema>/<group>，不会修改方案配置。自定义组由相应组件读取 Context::setting_values/setting_selected；声明本身不会自动改变任意组件行为。切换后当前会话刷新候选，通知 setting/group。现有单选 C ABI 槽位委托至新接口，set_option 不再切换类型组。普通 `switches` 不属于该 API。`get_option` / `set_option` 保留原有布尔运行时接口与通知机制；Evo 的主动选择记忆继续由 `select_switch` 和方案 `reset` 定义，不依赖 default.yaml 白名单。
 
-模糊音使用方案自行命名的多选变量，组内值为模糊组 ID，前端不需要识别 Prism 位编号。`get_setting_info` 返回变量显示名称及 fixed 状态；fixed 优先于用户保存值。用户词学习模式仅在未组字时允许切换。
+模糊音使用方案自行命名的多选变量，组内值为模糊组 ID，前端不需要识别 Prism 位编号。`get_setting_info` 返回变量显示名称及 fixed 状态；fixed 优先于用户保存值。用户词学习模式切换时重建相关翻译器并刷新上下文，保留原始输入及光标。

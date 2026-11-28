@@ -521,7 +521,7 @@ TEST_F(RimeAuxiliaryLookupTest, BuildAllNineColumnAuxiliaryGroups) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
+      - {value: $pinyin}
 lookup:
   dictionary: aux_path_test
   aux: aux_path_test
@@ -572,7 +572,7 @@ TEST_F(RimeAuxiliaryLookupTest, AuxOptionsDoNotRestrictBuildGroups) {
     mode: single
     default: $aux_path_other
     values:
-      - {id: $aux_path_other}
+      - {value: $aux_path_other}
 translator:
   dictionary: aux_path_test
   aux: ${aux_types}
@@ -597,7 +597,7 @@ TEST_F(RimeAuxiliaryLookupTest, RejectsMissingAuxiliaryDefinition) {
     mode: single
     default: $missing
     values:
-      - {id: $missing}
+      - {value: $missing}
 translator:
   dictionary: aux_path_test
   aux: ${aux_types}
@@ -622,8 +622,8 @@ TEST_F(RimeAuxiliaryLookupTest, SwitchesPreloadedAuxiliaryGroups) {
     mode: single
     default: $aux_path_test
     values:
-      - {id: $aux_path_test}
-      - {id: $aux_path_other}
+      - {value: $aux_path_test}
+      - {value: $aux_path_other}
 engine:
   segmentors: [auxiliary_suffix_segmentor, abc_segmentor, fallback_segmentor]
   translators: [script_translator]

@@ -1104,9 +1104,10 @@ static vector<string> ResolveSettingValues(RimeSessionId session_id,
                                            const char* group,
                                            const SettingGroupConfig& setting) {
   auto session = Service::instance().GetSession(session_id);
-  if (session && session->schema() && session->context() &&
-      session->schema()->schema_id() == schema_id) {
-    auto values = session->context()->setting_values(group);
+  auto* engine = session ? session->engine() : nullptr;
+  if (engine && engine->schema() && engine->context() &&
+      engine->schema()->schema_id() == schema_id) {
+    auto values = engine->context()->setting_values(group);
     if (setting.Normalize(&values))
       return values;
   }
@@ -1196,9 +1197,9 @@ static Bool RimeSelectSetting(RimeSessionId session_id,
   if (!setting.Normalize(&selected))
     return False;
   auto session = Service::instance().GetSession(session_id);
-  if (session && session->schema() && session->engine() &&
-      session->schema()->schema_id() == schema_id)
-    return Bool(session->engine()->SelectSetting(group, std::move(selected)));
+  auto* engine = session ? session->engine() : nullptr;
+  if (engine && engine->schema() && engine->schema()->schema_id() == schema_id)
+    return Bool(engine->SelectSetting(group, std::move(selected)));
   auto component = Config::Require("user_config");
   the<Config> user(component ? component->Create("user") : nullptr);
   return Bool(

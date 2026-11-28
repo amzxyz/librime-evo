@@ -282,10 +282,6 @@ bool ConcreteEngine::SelectConfiguredSetting(const string& group,
           ParseSettingReference(value, &dependency) && dependency == group)
         reload.push_back(i);
     }
-    // Confirmed phrases and lazy translations can hold the old UserDB and
-    // Language objects. Never replace them during composition.
-    if (!reload.empty() && context_->IsComposing())
-      return false;
     for (size_t index : reload)
       if (!translators_[index].component->PrepareForReload())
         return false;
@@ -313,10 +309,17 @@ bool ConcreteEngine::SelectConfiguredSetting(const string& group,
     return false;
   }
   if (changed) {
+    // Release all old candidate menus before replacing translators. Keep the
+    // raw input and caret so the new translators can compose it again.
+    const bool recompose = !reload.empty() && context_->IsComposing();
+    if (recompose)
+      context_->composition().clear();
     context_->SetSettingValues(group, std::move(values));
     for (auto& replacement : replacements)
       translators_[replacement.first].component = std::move(replacement.second);
     RefreshOptionComponents(context_.get());
+    if (recompose)
+      context_->update_notifier()(context_.get());
     message_sink_("setting", group);
   }
   return true;
@@ -518,6 +521,8 @@ void ConcreteEngine::OnSelect(Context* ctx) {
 void ConcreteEngine::ApplySchema(Schema* schema) {
   if (!schema)
     return;
+  if (switcher_ && switcher_->active())
+    switcher_->Deactivate();
   // 支持 this->schema() 原位重新加載
   if (schema != schema_.get()) {
     schema_.reset(schema);

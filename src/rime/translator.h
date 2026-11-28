@@ -38,7 +38,7 @@ class Translator : public Class<Translator, const Ticket&> {
 
   string name_space() const { return name_space_; }
 
-  // Structural settings may recreate a translator while the context is idle.
+  // Structural settings may recreate a translator at a setting change.
   // Finish pending learning before releasing the current instance.
   virtual bool PrepareForReload() { return true; }
 

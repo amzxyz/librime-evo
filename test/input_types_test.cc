@@ -34,8 +34,8 @@ class InputTypesTest : public ::testing::Test {
     mode: single
     default: $zrm
     values:
-      - {id: $zrm, label: 自然码}
-      - {id: $pinyin, label: 全拼}
+      - {value: $zrm, label: 自然码}
+      - {value: $pinyin, label: 全拼}
 
 )yaml");
     ASSERT_TRUE(config->LoadFromStream(stream));
@@ -110,15 +110,15 @@ TEST(TypeGroupsTest, TypeChoicesPersistButOrdinarySwitchesReset) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
-      - {id: $zrm}
+      - {value: $pinyin}
+      - {value: $zrm}
   aux_types:
     type: auxiliary
     mode: single
     default: $aux_wanxiang
     values:
-      - {id: $aux_wanxiang}
-      - {id: $aux_zrm}
+      - {value: $aux_wanxiang}
+      - {value: $aux_zrm}
 switches:
   - name: test_toggle
     reset: 1
@@ -165,8 +165,8 @@ TEST(TypeGroupsTest, RemovedChoiceFallsBackToFirstOption) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
-      - {id: $flypy}
+      - {value: $pinyin}
+      - {value: $flypy}
 )YAML");
   ASSERT_TRUE(config->LoadFromStream(data));
   the<Engine> engine(Engine::Create());
@@ -189,15 +189,15 @@ TEST(TypeGroupsTest, ApiEnumeratesDisplayReadyOptions) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin, label: 全拼}
-      - {id: $zrm}
+      - {value: $pinyin, label: 全拼}
+      - {value: $zrm}
   aux_types:
     type: auxiliary
     mode: single
     default: $aux_wanxiang
     values:
-      - {id: $aux_wanxiang, label: 万象}
-      - {id: $aux_zrm, label: ""}
+      - {value: $aux_wanxiang, label: 万象}
+      - {value: $aux_zrm, label: ""}
 schema: {schema_id: type_options_api_test}
 )YAML";
     ASSERT_TRUE(file.good());
@@ -261,15 +261,15 @@ TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
-      - {id: $flypy}
+      - {value: $pinyin}
+      - {value: $flypy}
   aux_types:
     type: auxiliary
     mode: single
     default: $aux_wanxiang
     values:
-      - {id: $aux_wanxiang}
-      - {id: $aux_zrm}
+      - {value: $aux_wanxiang}
+      - {value: $aux_zrm}
 )YAML");
     EXPECT_TRUE(config->LoadFromStream(data));
     return new Schema(schema_id, config);
@@ -315,14 +315,14 @@ runtime_settings:
     mode: single
     default: $pinyin
     values:
-      - {id: $pinyin}
-      - {id: $zrm}
+      - {value: $pinyin}
+      - {value: $zrm}
   feature:
     mode: boolean
     default: true
   categories:
     mode: multiple
-    values: [{id: a}, {id: b}, {id: c}]
+    values: [{value: a}, {value: b}, {value: c}]
     default: [a]
 )YAML");
     EXPECT_TRUE(config->LoadFromStream(data));
