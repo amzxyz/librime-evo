@@ -11,7 +11,7 @@
 | `switcher/fix_schema_list_order` | 传统配置；下一会话的实际初始方案通过 get_initial_schema 获取 |
 | `translator/dictionary`、`translator/prism`、`prisms`、`build` | 内核资源工厂解释；前端不推导编译文件名 |
 | `grammar/language` | 模型插件解析；预热返回实际映射文件路径 |
-| `engine/processors`、`super_sequence` | 候选编辑通过 edit_candidate 接口判断可用性并调用，不解析 Lua 快捷键。不是通用组件状态查询 |
+| 候选编辑 | 通过 edit_candidate 直接调用内核的候选编辑动作 |
 | `runtime_settings` | 使用 get_settings / get_setting / select_setting，无需解析配置组 |
 
 配置编辑器读写 YAML 不属于运行时语义推导。

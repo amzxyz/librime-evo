@@ -908,24 +908,26 @@ bool UserDictionaryComponent::ResolveConfig(Config* config,
   config->GetString(name_space + "/user_dict_mode", &resolved.mode);
   string group;
   if (ParseSettingReference(resolved.mode, &group)) {
-    SettingGroupConfig setting;
-    if (!setting.Load(config, group, context) ||
-        setting.mode != SettingGroupConfig::kSingle ||
-        !setting.resource_type.empty())
+    SettingGroupConfig fallback;
+    const auto* setting = SettingGroupConfig::Find(
+        config, group, context ? &context->setting_groups() : nullptr,
+        &fallback);
+    if (!setting || setting->mode != SettingGroupConfig::kSingle ||
+        !setting->resource_type.empty())
       return false;
-    for (const auto& choice : setting.options)
+    for (const auto& choice : setting->options)
       if (choice.value != "auto" && choice.value != "manual" &&
           choice.value != "off")
         return false;
     const auto& selected =
-        context ? context->setting_values(group) : setting.defaults;
+        context ? context->setting_values(group) : setting->defaults;
     if (selected.size() != 1)
       return false;
     resolved.mode = selected.front();
     // Synchronization collects schema-declared databases, including ones
     // which can be enabled through a runtime variable.
-    if (include_inactive && !setting.fixed && resolved.mode == "off") {
-      for (const auto& choice : setting.options) {
+    if (include_inactive && !setting->fixed && resolved.mode == "off") {
+      for (const auto& choice : setting->options) {
         if (choice.value != "off") {
           resolved.mode = choice.value;
           break;

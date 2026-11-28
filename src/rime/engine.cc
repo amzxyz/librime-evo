@@ -269,14 +269,20 @@ bool ConcreteEngine::SelectConfiguredSetting(const string& group,
   const bool changed = context_->setting_values(group) != values;
   vector<size_t> reload;
   if (changed) {
-    for (const auto& entry : translators_) {
-      if (!entry.component->PrepareSetting(group, values))
-        return false;
+    try {
+      for (const auto& entry : translators_) {
+        if (!entry.component->PrepareSetting(group, values))
+          return false;
+      }
+    } catch (const std::exception& ex) {
+      LOG(ERROR) << "cannot prepare setting '" << group << "': " << ex.what();
+      return false;
     }
     for (size_t i = 0; i < translators_.size(); ++i) {
       const auto& entry = translators_[i];
       Ticket ticket(this, "translator", entry.prescription);
       if (ticket.klass != "script_translator" &&
+          ticket.klass != "r10n_translator" &&
           ticket.klass != "table_translator")
         continue;
       string value, dependency;
@@ -707,8 +713,9 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
       ticket.schema = schema;
       // Reverse lookup is intentionally lazy, and plugin translators may have
       // side effects. Never construct a translator or open a UserDB here.
-      if (ticket.klass != "script_translator" &&
-          ticket.klass != "table_translator")
+      const bool scripted = ticket.klass == "script_translator" ||
+                            ticket.klass == "r10n_translator";
+      if (!scripted && ticket.klass != "table_translator")
         continue;
       const auto& ns = ticket.name_space;
       if (dictionaries.insert(ns).second) {
@@ -726,7 +733,7 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
       string charset;
       if (config->GetString(ns + "/charset", &charset))
         add_rewrite(charset);
-      if (ticket.klass == "script_translator") {
+      if (scripted) {
         grammar = true;
         string aux;
         if (config->GetString(ns + "/aux", &aux)) {

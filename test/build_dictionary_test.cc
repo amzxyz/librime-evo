@@ -20,6 +20,7 @@
 #include <rime/gear/table_translator.h>
 #include <rime/gear/unity_table_encoder.h>
 #include <rime/key_event.h>
+#include <rime/language.h>
 #include <rime/menu.h>
 #include <rime/processor.h>
 #include <rime/segmentation.h>
@@ -1481,6 +1482,55 @@ translator:
   EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
   EXPECT_EQ("hao", engine->context()->input());
   EXPECT_TRUE(engine->context()->HasMenu());
+  // Mapping an empty file can throw instead of returning a failed load.
+  {
+    std::ofstream empty("build_dict_test.zrm.prism.bin");
+  }
+  EXPECT_FALSE(engine->SelectSetting("input_types", {"zrm"}));
+  EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_TRUE(engine->context()->HasMenu());
+}
+
+TEST_F(RimeBuildDictionaryTest, RejectsPrismWithMissingSupplement) {
+  const string settings = string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values: [{value: $pinyin}, {value: $zrm}]
+translator:
+  dictionary: $build_dict_test
+  prism: ${input_types}
+  user_dict_mode: off
+reverse_lookup:
+  dictionary: $build_dict_test
+  prism: ${input_types}
+)YAML";
+  WriteSchema(settings);
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  {
+    Prism invalid(path("build_dict_test.zrm.prism.bin"));
+    ASSERT_TRUE(invalid.Build(Syllabary{"hao", "ni"}, nullptr, 0, 0, true));
+    ASSERT_TRUE(invalid.Save());
+  }
+  for (const char* translator :
+       {"script_translator", "reverse_lookup_translator"}) {
+    SCOPED_TRACE(translator);
+    WriteSchema(settings + "engine:\n  translators: [" + translator + "]\n");
+    auto engine = OpenEngine();
+    EXPECT_FALSE(engine->SelectSetting("input_types", {"zrm"}));
+    EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+  }
+}
+
+TEST_F(RimeBuildDictionaryTest, ValidatesDefaultReverseLookupNamespace) {
+  WriteSchema(string(kDefinitions) + R"YAML(engine:
+  translators: [reverse_lookup_translator]
+reverse_lookup:
+  dictionary: $build_dict_test
+  prism: ${missing_group}
+)YAML");
+  EXPECT_FALSE(DictCompiler::CompileDictionaries(schema_path_));
 }
 
 TEST_F(RimeBuildDictionaryTest, RejectsMissingPrismDefinition) {
@@ -1558,7 +1608,7 @@ second:
 }
 
 TEST_F(RimeBuildDictionaryTest, UserDictionaryModeChangesDuringComposition) {
-  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  const string settings = string(kDefinitions) + R"YAML(runtime_settings:
   learning:
     mode: single
     default: off
@@ -1566,9 +1616,6 @@ TEST_F(RimeBuildDictionaryTest, UserDictionaryModeChangesDuringComposition) {
       - {value: off, label: Off}
       - {value: manual, label: Manual}
       - {value: auto, label: Auto}
-engine:
-  segmentors: [abc_segmentor]
-  translators: [script_translator]
 translator:
   dictionary: $build_dict_test
   prism: $pinyin
@@ -1576,24 +1623,30 @@ translator:
   db_class: plain_userdb
   user_dict_mode: ${learning}
   enable_completion: false
-)YAML");
+)YAML";
+  WriteSchema(settings);
   ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
-  auto engine = OpenEngine();
-  ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
-  auto* context = engine->context();
-  context->set_input("hao");
-  ASSERT_TRUE(engine->SelectSetting("learning", {"manual"}));
-  EXPECT_EQ("hao", context->input());
-  EXPECT_TRUE(context->setting_selected("learning", "manual"));
-  UserDictionaryConfig config;
-  ASSERT_TRUE(UserDictionaryComponent::ResolveConfig(
-      engine->schema()->config(), "translator", &config, context));
-  EXPECT_EQ("manual", config.mode);
-  ASSERT_TRUE(engine->SelectSetting("learning", {"auto"}));
-  ASSERT_TRUE(UserDictionaryComponent::ResolveConfig(
-      engine->schema()->config(), "translator", &config, context));
-  EXPECT_EQ("auto", config.mode);
-  ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
-  EXPECT_FALSE(UserDictionaryComponent::ResolveConfig(
-      engine->schema()->config(), "translator", &config, context));
+  for (const char* translator : {"script_translator", "r10n_translator"}) {
+    SCOPED_TRACE(translator);
+    WriteSchema(settings + "engine:\n  segmentors: [abc_segmentor]\n" +
+                "  translators: [" + translator + "]\n");
+    auto engine = OpenEngine();
+    ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
+    auto* context = engine->context();
+    context->set_input("hao");
+    auto language = [context]() {
+      auto phrase = As<Phrase>(
+          Candidate::GetGenuineCandidate(context->GetSelectedCandidate()));
+      return phrase && phrase->language() ? phrase->language()->name()
+                                          : string();
+    };
+    EXPECT_EQ("build_dict_test", language());
+    ASSERT_TRUE(engine->SelectSetting("learning", {"manual"}));
+    EXPECT_EQ("hao", context->input());
+    EXPECT_EQ("build_dict_encoder", language());
+    ASSERT_TRUE(engine->SelectSetting("learning", {"auto"}));
+    EXPECT_EQ("build_dict_encoder", language());
+    ASSERT_TRUE(engine->SelectSetting("learning", {"off"}));
+    EXPECT_EQ("build_dict_test", language());
+  }
 }

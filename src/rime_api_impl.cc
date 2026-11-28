@@ -1089,38 +1089,50 @@ static void RimeFreeCodeChoices(RimeCodeChoice* choices, size_t count) {
   delete[] choices;
 }
 
-static bool LoadRuntimeSetting(const char* schema_id,
-                               const char* group,
-                               SettingGroupConfig* types) {
-  if (!schema_id || !group || !safe_path::ValidRelativeName(schema_id) ||
-      !safe_path::ValidRelativeName(group))
-    return false;
-  Schema schema(schema_id);
-  return types->Load(schema.config(), group);
+static an<Session> FindSettingsSession(RimeSessionId session_id,
+                                       const char* schema_id) {
+  if (!session_id || !schema_id)
+    return nullptr;
+  auto session = Service::instance().GetSession(session_id);
+  auto* engine = session ? session->engine() : nullptr;
+  return engine && engine->schema()->schema_id() == schema_id ? session
+                                                              : nullptr;
 }
 
-static vector<string> ResolveSettingValues(RimeSessionId session_id,
+static const SettingGroupConfig* FindRuntimeSetting(
+    const char* schema_id,
+    const char* group,
+    SettingGroupConfig* fallback,
+    const an<Session>& session = nullptr) {
+  if (!schema_id || !group)
+    return nullptr;
+  if (session)
+    return SettingGroupConfig::Find(
+        nullptr, group, &session->engine()->context()->setting_groups(),
+        nullptr);
+  if (!safe_path::ValidRelativeName(schema_id) ||
+      !safe_path::ValidRelativeName(group))
+    return nullptr;
+  Schema schema(schema_id);
+  return fallback->Load(schema.config(), group) ? fallback : nullptr;
+}
+
+static vector<string> ResolveSettingValues(const an<Session>& session,
                                            const char* schema_id,
                                            const char* group,
                                            const SettingGroupConfig& setting) {
-  auto session = Service::instance().GetSession(session_id);
-  auto* engine = session ? session->engine() : nullptr;
-  if (engine && engine->schema() && engine->context() &&
-      engine->schema()->schema_id() == schema_id) {
-    auto values = engine->context()->setting_values(group);
-    if (setting.Normalize(&values))
-      return values;
-  }
+  if (session)
+    return session->engine()->context()->setting_values(group);
   auto component = Config::Require("user_config");
   the<Config> user(component ? component->Create("user") : nullptr);
   return setting.RestoreValues(user.get(), schema_id, group);
 }
 
-static string ResolveTypeOption(RimeSessionId session_id,
+static string ResolveTypeOption(const an<Session>& session,
                                 const char* schema_id,
                                 const char* group,
                                 const SettingGroupConfig& setting) {
-  auto values = ResolveSettingValues(session_id, schema_id, group, setting);
+  auto values = ResolveSettingValues(session, schema_id, group, setting);
   return values.empty() ? string() : values.front();
 }
 
@@ -1129,13 +1141,16 @@ static Bool RimeGetTypeOption(RimeSessionId session_id,
                               const char* group,
                               char* option,
                               size_t buffer_size) {
-  SettingGroupConfig types;
-  if (!option || !buffer_size ||
-      !LoadRuntimeSetting(schema_id, group, &types) ||
-      types.mode != SettingGroupConfig::kSingle)
+  if (!option || !buffer_size)
+    return False;
+  const auto session = FindSettingsSession(session_id, schema_id);
+  SettingGroupConfig fallback;
+  const auto* setting =
+      FindRuntimeSetting(schema_id, group, &fallback, session);
+  if (!setting || setting->mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
-      ResolveTypeOption(session_id, schema_id, group, types);
+      ResolveTypeOption(session, schema_id, group, *setting);
   if (selected.size() >= buffer_size)
     return False;
   selected.copy(option, selected.size());
@@ -1152,20 +1167,22 @@ static Bool RimeGetTypeOptions(RimeSessionId session_id,
     return False;
   *options = nullptr;
   *count = 0;
-  SettingGroupConfig types;
-  if (!LoadRuntimeSetting(schema_id, group, &types) ||
-      types.mode != SettingGroupConfig::kSingle)
+  const auto session = FindSettingsSession(session_id, schema_id);
+  SettingGroupConfig fallback;
+  const auto* setting =
+      FindRuntimeSetting(schema_id, group, &fallback, session);
+  if (!setting || setting->mode != SettingGroupConfig::kSingle)
     return False;
   const string selected =
-      ResolveTypeOption(session_id, schema_id, group, types);
-  auto* items = new RimeTypeOption[types.options.size()]{};
-  for (size_t i = 0; i < types.options.size(); ++i) {
-    const auto& item = types.options[i];
+      ResolveTypeOption(session, schema_id, group, *setting);
+  auto* items = new RimeTypeOption[setting->options.size()]{};
+  for (size_t i = 0; i < setting->options.size(); ++i) {
+    const auto& item = setting->options[i];
     items[i] = {dup_string(item.value), dup_string(item.label),
                 Bool(item.value == selected)};
   }
   *options = items;
-  *count = types.options.size();
+  *count = setting->options.size();
   return True;
 }
 
@@ -1179,42 +1196,50 @@ static void RimeFreeTypeOptions(RimeTypeOption* options, size_t count) {
   delete[] options;
 }
 
-static Bool RimeSelectSetting(RimeSessionId session_id,
-                              const char* schema_id,
-                              const char* group,
-                              const char* const* values,
-                              size_t count) {
-  SettingGroupConfig setting;
-  if ((count && !values) || !LoadRuntimeSetting(schema_id, group, &setting) ||
-      setting.fixed || count > setting.options.size())
+static Bool SelectRuntimeSetting(RimeSessionId session_id,
+                                 const char* schema_id,
+                                 const char* group,
+                                 const char* const* values,
+                                 size_t count,
+                                 bool single_only) {
+  if (count && !values)
+    return False;
+  const auto session = FindSettingsSession(session_id, schema_id);
+  SettingGroupConfig fallback;
+  const auto* setting =
+      FindRuntimeSetting(schema_id, group, &fallback, session);
+  if (!setting || setting->fixed || count > setting->options.size() ||
+      (single_only && setting->mode != SettingGroupConfig::kSingle))
     return False;
   vector<string> selected;
+  selected.reserve(count);
   for (size_t i = 0; i < count; ++i) {
     if (!values[i])
       return False;
     selected.emplace_back(values[i]);
   }
-  if (!setting.Normalize(&selected))
-    return False;
-  auto session = Service::instance().GetSession(session_id);
-  auto* engine = session ? session->engine() : nullptr;
-  if (engine && engine->schema() && engine->schema()->schema_id() == schema_id)
-    return Bool(engine->SelectSetting(group, std::move(selected)));
+  if (session)
+    return Bool(session->engine()->SelectSetting(group, std::move(selected)));
   auto component = Config::Require("user_config");
   the<Config> user(component ? component->Create("user") : nullptr);
   return Bool(
-      setting.SaveValues(user.get(), schema_id, group, std::move(selected)));
+      setting->SaveValues(user.get(), schema_id, group, std::move(selected)));
+}
+
+static Bool RimeSelectSetting(RimeSessionId session_id,
+                              const char* schema_id,
+                              const char* group,
+                              const char* const* values,
+                              size_t count) {
+  return SelectRuntimeSetting(session_id, schema_id, group, values, count,
+                              false);
 }
 
 static Bool RimeSelectTypeOption(RimeSessionId session_id,
                                  const char* schema_id,
                                  const char* group,
                                  const char* option) {
-  SettingGroupConfig setting;
-  if (!option || !LoadRuntimeSetting(schema_id, group, &setting) ||
-      setting.mode != SettingGroupConfig::kSingle)
-    return False;
-  return RimeSelectSetting(session_id, schema_id, group, &option, 1);
+  return SelectRuntimeSetting(session_id, schema_id, group, &option, 1, true);
 }
 
 static Bool RimeGetSettingInfo(const char* schema_id,
@@ -1222,16 +1247,18 @@ static Bool RimeGetSettingInfo(const char* schema_id,
                                char* label,
                                size_t label_size,
                                Bool* fixed) {
-  SettingGroupConfig setting;
-  if (!fixed || !label || !label_size ||
-      !LoadRuntimeSetting(schema_id, group, &setting))
+  if (!fixed || !label || !label_size)
     return False;
-  const string title = setting.label.empty() ? group : setting.label;
+  SettingGroupConfig fallback;
+  const auto* setting = FindRuntimeSetting(schema_id, group, &fallback);
+  if (!setting)
+    return False;
+  const string title = setting->label.empty() ? group : setting->label;
   if (title.size() >= label_size)
     return False;
   title.copy(label, title.size());
   label[title.size()] = '\0';
-  *fixed = setting.fixed ? True : False;
+  *fixed = setting->fixed ? True : False;
   return True;
 }
 
@@ -1245,21 +1272,24 @@ static Bool RimeGetSetting(RimeSessionId session_id,
     return False;
   *values = nullptr;
   *count = 0;
-  SettingGroupConfig setting;
-  if (!LoadRuntimeSetting(schema_id, group, &setting))
+  const auto session = FindSettingsSession(session_id, schema_id);
+  SettingGroupConfig fallback;
+  const auto* setting =
+      FindRuntimeSetting(schema_id, group, &fallback, session);
+  if (!setting)
     return False;
   const auto selected =
-      ResolveSettingValues(session_id, schema_id, group, setting);
-  *mode = static_cast<RimeSettingMode>(setting.mode);
-  auto* items = new RimeSettingValue[setting.options.size()]{};
-  for (size_t i = 0; i < setting.options.size(); ++i) {
-    const auto& item = setting.options[i];
+      ResolveSettingValues(session, schema_id, group, *setting);
+  *mode = static_cast<RimeSettingMode>(setting->mode);
+  auto* items = new RimeSettingValue[setting->options.size()]{};
+  for (size_t i = 0; i < setting->options.size(); ++i) {
+    const auto& item = setting->options[i];
     items[i] = {dup_string(item.value), dup_string(item.label),
                 Bool(std::find(selected.begin(), selected.end(), item.value) !=
                      selected.end())};
   }
   *values = items;
-  *count = setting.options.size();
+  *count = setting->options.size();
   return True;
 }
 

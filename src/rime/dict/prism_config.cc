@@ -12,7 +12,7 @@ bool PrismConfig::Load(Config* schema, const string& name_space) {
 
 bool PrismConfig::Load(Config* schema,
                        const string& name_space,
-                       const Context* context) {
+                       const map<string, SettingGroupConfig>* groups) {
   name.clear();
   selections.clear();
   setting.clear();
@@ -32,22 +32,23 @@ bool PrismConfig::Load(Config* schema,
       return false;
     }
     if (ParseSettingReference(name, &setting)) {
-      SettingGroupConfig types;
-      if (!types.Load(schema, setting, context) ||
-          types.mode != SettingGroupConfig::kSingle ||
-          types.resource_type != "prism" || types.options.empty())
+      SettingGroupConfig fallback;
+      const auto* types =
+          SettingGroupConfig::Find(schema, setting, groups, &fallback);
+      if (!types || types->mode != SettingGroupConfig::kSingle ||
+          types->resource_type != "prism")
         return false;
       string dictionary;
       if (!schema->GetString(name_space + "/dictionary", &dictionary) ||
           !ResolveResourceReference(schema, "dictionary", &dictionary))
         return false;
-      for (const auto& choice : types.options) {
+      for (const auto& choice : types->options) {
         string resource = "$" + choice.value;
         if (!ResolvePrismReference(schema, dictionary, &resource))
           return false;
         selections.push_back({resource, choice.value, choice.label});
       }
-      default_selection = types.defaults.front();
+      default_selection = types->defaults.front();
       name.clear();
     } else {
       string dictionary;

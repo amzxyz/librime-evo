@@ -379,11 +379,13 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
         !ResolveResourceReference(config, "auxiliary", &auxiliary_type_))
       auxiliary_type_.clear();
     if (!auxiliary_setting_.empty()) {
-      SettingGroupConfig types;
-      if (!types.Load(config, auxiliary_setting_,
-                      ticket.engine ? ticket.engine->context() : nullptr) ||
-          types.mode != SettingGroupConfig::kSingle ||
-          types.resource_type != "auxiliary") {
+      const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
+      SettingGroupConfig fallback;
+      const auto* types = SettingGroupConfig::Find(
+          config, auxiliary_setting_,
+          context ? &context->setting_groups() : nullptr, &fallback);
+      if (!types || types->mode != SettingGroupConfig::kSingle ||
+          types->resource_type != "auxiliary") {
         auxiliary_type_.clear();
         auxiliary_setting_.clear();
       }

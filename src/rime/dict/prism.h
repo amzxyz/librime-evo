@@ -84,6 +84,7 @@ class SpellingAccessor {
   RIME_DLL bool Next();
   RIME_DLL bool exhausted() const;
   RIME_DLL SyllableId syllable_id() const;
+  SpellingType type() const;
   RIME_DLL SpellingProperties properties() const;
 
  protected:

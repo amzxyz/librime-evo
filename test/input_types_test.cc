@@ -115,9 +115,9 @@ TEST(TypeGroupsTest, TypeChoicesPersistButOrdinarySwitchesReset) {
   aux_types:
     type: auxiliary
     mode: single
-    default: $aux_wanxiang
+    default: $aux_primary
     values:
-      - {value: $aux_wanxiang}
+      - {value: $aux_primary}
       - {value: $aux_zrm}
 switches:
   - name: test_toggle
@@ -134,7 +134,7 @@ switches:
   engine->ApplySchema(schema());
   auto* context = engine->context();
   EXPECT_TRUE(context->setting_selected("input_types", "pinyin"));
-  EXPECT_TRUE(context->setting_selected("aux_types", "aux_wanxiang"));
+  EXPECT_TRUE(context->setting_selected("aux_types", "aux_primary"));
   EXPECT_TRUE(context->get_option("test_toggle"));
   EXPECT_FALSE(context->get_option("test_radio_a"));
   EXPECT_TRUE(context->get_option("test_radio_b"));
@@ -194,9 +194,9 @@ TEST(TypeGroupsTest, ApiEnumeratesDisplayReadyOptions) {
   aux_types:
     type: auxiliary
     mode: single
-    default: $aux_wanxiang
+    default: $aux_primary
     values:
-      - {value: $aux_wanxiang, label: 万象}
+      - {value: $aux_primary, label: 主辅助}
       - {value: $aux_zrm, label: ""}
 schema: {schema_id: type_options_api_test}
 )YAML";
@@ -222,7 +222,7 @@ schema: {schema_id: type_options_api_test}
   ASSERT_TRUE(
       api->get_type_options(0, id.c_str(), "aux_types", &items, &count));
   ASSERT_EQ(2u, count);
-  EXPECT_STREQ("万象", items[0].label);
+  EXPECT_STREQ("主辅助", items[0].label);
   EXPECT_FALSE(items[0].selected);
   EXPECT_STREQ("aux_zrm", items[1].label);
   EXPECT_TRUE(items[1].selected);
@@ -230,6 +230,24 @@ schema: {schema_id: type_options_api_test}
   EXPECT_FALSE(api->get_type_options(0, id.c_str(), "unknown", &items, &count));
   EXPECT_EQ(nullptr, items);
   EXPECT_EQ(0u, count);
+
+  const auto session = api->create_session();
+  ASSERT_NE(0u, session);
+  ASSERT_TRUE(api->select_schema(session, id.c_str()));
+  ASSERT_TRUE(
+      api->select_type_option(session, id.c_str(), "input_types", "zrm"));
+  RimeSettingMode mode = kRimeSettingBoolean;
+  RimeSettingValue* values = nullptr;
+  EXPECT_TRUE(api->get_setting(session, id.c_str(), "input_types", &mode,
+                               &values, &count));
+  EXPECT_EQ(kRimeSettingSingle, mode);
+  EXPECT_EQ(2u, count);
+  if (count == 2) {
+    EXPECT_FALSE(values[0].selected);
+    EXPECT_TRUE(values[1].selected);
+  }
+  api->free_setting_values(values, count);
+  api->destroy_session(session);
   ASSERT_TRUE(user->SetItem(path, nullptr));
   EXPECT_TRUE(user->Save());
   std::remove(filename.c_str());
@@ -266,9 +284,9 @@ TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
   aux_types:
     type: auxiliary
     mode: single
-    default: $aux_wanxiang
+    default: $aux_primary
     values:
-      - {value: $aux_wanxiang}
+      - {value: $aux_primary}
       - {value: $aux_zrm}
 )YAML");
     EXPECT_TRUE(config->LoadFromStream(data));
@@ -279,13 +297,13 @@ TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
     engine->ApplySchema(schema());
     EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
     EXPECT_TRUE(
-        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
+        engine->context()->setting_selected("aux_types", "aux_primary"));
     ASSERT_TRUE(engine->SelectSetting("input_types", {"flypy"}));
     ASSERT_TRUE(engine->SelectSetting("aux_types", {"aux_zrm"}));
     EXPECT_TRUE(engine->context()->setting_selected("input_types", "flypy"));
     EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
     EXPECT_FALSE(
-        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
+        engine->context()->setting_selected("aux_types", "aux_primary"));
   }
   {
     the<Engine> engine(Engine::Create());
@@ -294,7 +312,7 @@ TEST(TypeGroupsTest, IndependentGroupsPersistAcrossSessions) {
     EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
     EXPECT_FALSE(engine->context()->setting_selected("input_types", "pinyin"));
     EXPECT_FALSE(
-        engine->context()->setting_selected("aux_types", "aux_wanxiang"));
+        engine->context()->setting_selected("aux_types", "aux_primary"));
     EXPECT_FALSE(engine->SelectSetting("aux_types", {}));
     EXPECT_TRUE(engine->context()->setting_selected("aux_types", "aux_zrm"));
   }

@@ -122,12 +122,21 @@ class Dictionary : public Class<Dictionary, const Ticket&> {
   uint32_t fuzzy_mask() const { return fuzzy_mask_; }
 
  private:
+  struct TableBindings {
+    vector<of<Table>> tables;
+    vector<SyllableIdMap> code_maps;
+  };
+  bool LoadBindings(Prism* prism, TableBindings* bindings);
+
   string name_;
   vector<string> packs_;
   vector<of<Table>> tables_;
   an<Prism> prism_;
   map<string, an<Prism>> prisms_;
   vector<SyllableIdMap> code_maps_;
+  // Keep successful preflight bindings separate from the active lookup.
+  an<Prism> prepared_prism_;
+  TableBindings prepared_bindings_;
   bool bindings_valid_ = false;
   const Prism* fuzzy_prism_ = nullptr;
   vector<string> fuzzy_types_;

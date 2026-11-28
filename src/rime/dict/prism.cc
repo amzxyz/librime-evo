@@ -255,6 +255,12 @@ SyllableId SpellingAccessor::syllable_id() const {
     return spelling_id_;
 }
 
+SpellingType SpellingAccessor::type() const {
+  return iter_ && iter_ < end_
+             ? static_cast<SpellingType>(iter_->flags & kSpellingTypeMask)
+             : kNormalSpelling;
+}
+
 SpellingProperties SpellingAccessor::properties() const {
   SpellingProperties props;
   if (iter_ && iter_ < end_) {
@@ -603,12 +609,13 @@ void Prism::ExpandSearch(std::string_view key,
   if (!result)
     return;
   result->clear();
+  const bool conditional = HasConditionalSpellings();
   auto eligible = [&](int id) {
-    if (!HasConditionalSpellings())
+    if (!conditional)
       return true;
-    for (auto accessor = QuerySpelling(id, enabled_fuzzy);
+    for (SpellingAccessor accessor(spelling_map_, id, enabled_fuzzy, true);
          !accessor.exhausted(); accessor.Next()) {
-      if (accessor.properties().type <= max_type)
+      if (accessor.type() <= max_type)
         return true;
     }
     return false;

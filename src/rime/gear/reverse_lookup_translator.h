@@ -26,6 +26,7 @@ class ReverseLookupTranslator : public Translator {
                       const vector<string>& values) override;
 
  protected:
+  void InitializeDictionary();
   void Initialize();
 
   string tag_;

@@ -8,7 +8,6 @@
 
 namespace rime {
 class Config;
-class Context;
 struct SettingChoice {
   string value;
   string label;
@@ -18,7 +17,11 @@ struct SettingGroupConfig {
   enum Mode { kBoolean = 0, kSingle = 1, kMultiple = 2 };
 
   RIME_DLL bool Load(Config* config, const string& group);
-  bool Load(Config* config, const string& group, const Context* context);
+  static const SettingGroupConfig* Find(
+      Config* config,
+      const string& group,
+      const map<string, SettingGroupConfig>* groups,
+      SettingGroupConfig* fallback);
   RIME_DLL static bool LoadGroups(Config* config,
                                   map<string, SettingGroupConfig>* groups);
   RIME_DLL bool Contains(const string& value) const;

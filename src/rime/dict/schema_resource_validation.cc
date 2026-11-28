@@ -48,7 +48,7 @@ bool ValidateTranslator(Config* config,
                         const Settings& settings,
                         const string& ns) {
   PrismConfig prism;
-  if (!prism.Load(config, ns))
+  if (!prism.Load(config, ns, &settings))
     return false;
   string dictionary;
   config->GetString(ns + "/dictionary", &dictionary);
@@ -143,11 +143,16 @@ bool ValidateSchemaResources(Config* config) {
     for (const auto& entry : *translators) {
       Ticket ticket(nullptr, "translator", Prescription(entry));
       if (ticket.klass != "script_translator" &&
+          ticket.klass != "r10n_translator" &&
           ticket.klass != "table_translator" &&
           ticket.klass != "reverse_lookup_translator")
         continue;
-      if (!ValidateTranslator(config, settings, ticket.name_space)) {
-        LOG(ERROR) << "invalid resource binding in " << ticket.name_space;
+      const string ns = ticket.klass == "reverse_lookup_translator" &&
+                                ticket.name_space == "translator"
+                            ? "reverse_lookup"
+                            : ticket.name_space;
+      if (!ValidateTranslator(config, settings, ns)) {
+        LOG(ERROR) << "invalid resource binding in " << ns;
         return false;
       }
     }

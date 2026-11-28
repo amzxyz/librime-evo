@@ -121,9 +121,10 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
   if (!ticket.schema)
     return;
   if (Config* config = ticket.schema->config()) {
+    const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
     prism_config_valid_ =
         prism_config_.Load(config, ticket.name_space,
-                           ticket.engine ? ticket.engine->context() : nullptr);
+                           context ? &context->setting_groups() : nullptr);
     string fuzzy;
     if (config->GetString(ticket.name_space + "/fuzzy", &fuzzy)) {
       if (!ParseSettingReference(fuzzy, &fuzzy_setting_))
@@ -187,9 +188,9 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
 bool TranslatorOptions::PreparePrismSetting(Dictionary* dictionary,
                                             const string& group,
                                             const vector<string>& values) {
-  if (prism_config_.setting != group || !dictionary)
+  if (prism_config_.setting != group)
     return true;
-  if (values.size() != 1)
+  if (!dictionary || values.size() != 1)
     return false;
   for (const auto& selection : prism_config_.selections) {
     if (selection.option == values.front())
@@ -230,9 +231,9 @@ bool TranslatorOptions::SelectPrism(Dictionary* dictionary,
                  << "' for dictionary '" << dictionary->name() << "'";
       return false;
     }
-  }
-  if (!dictionary->loaded() && !dictionary->Load())
+  } else if (!dictionary->loaded() && !dictionary->Load()) {
     return false;
+  }
   static const vector<string> no_fuzzy_types;
   dictionary->SetFuzzyTypes(context && !fuzzy_setting_.empty()
                                 ? context->setting_values(fuzzy_setting_)

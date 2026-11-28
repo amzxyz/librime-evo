@@ -576,19 +576,33 @@ bool Dictionary::AddPrism(const string& name, const an<Prism>& prism) {
 
 bool Dictionary::PreparePrism(const string& name) {
   auto it = prisms_.find(name);
-  return it != prisms_.end() && it->second &&
-         (it->second->IsOpen() || it->second->Load());
+  if (it == prisms_.end() || !it->second || tables_.empty())
+    return false;
+  const auto& prism = it->second;
+  if (prism_ == prism && loaded())
+    return true;
+  if (prepared_prism_ == prism)
+    return true;
+  TableBindings bindings{tables_, {}};
+  if (!LoadBindings(prism.get(), &bindings))
+    return false;
+  prepared_prism_ = prism;
+  prepared_bindings_ = std::move(bindings);
+  return true;
 }
 
 bool Dictionary::SetPrism(const string& name) {
   auto it = prisms_.find(name);
-  if (it == prisms_.end() || !it->second ||
-      (!it->second->IsOpen() && !it->second->Load()))
+  if (it == prisms_.end() || !it->second)
     return false;
-  if (prism_ != it->second) {
-    prism_ = it->second;
-    bindings_valid_ = false;
-  }
+  if (prism_ == it->second && loaded())
+    return true;
+  if (!PreparePrism(name))
+    return false;
+  prism_ = std::move(prepared_prism_);
+  tables_ = std::move(prepared_bindings_.tables);
+  code_maps_ = std::move(prepared_bindings_.code_maps);
+  bindings_valid_ = true;
   return true;
 }
 
@@ -734,7 +748,7 @@ size_t Dictionary::LookupWords(DictEntryIterator* result,
     SpellingAccessor accessor(prism_->QuerySpelling(match.value, fuzzy_mask_));
     while (!accessor.exhausted()) {
       SyllableId syllable_id = accessor.syllable_id();
-      SpellingType type = accessor.properties().type;
+      SpellingType type = accessor.type();
       accessor.Next();
       if (type > kNormalSpelling)
         continue;
@@ -815,65 +829,74 @@ bool Dictionary::Remove() {
 
 bool Dictionary::Load() {
   bindings_valid_ = false;
+  TableBindings bindings{tables_, {}};
+  if (!LoadBindings(prism_.get(), &bindings))
+    return false;
+  tables_ = std::move(bindings.tables);
+  code_maps_ = std::move(bindings.code_maps);
+  bindings_valid_ = true;
+  return true;
+}
+
+bool Dictionary::LoadBindings(Prism* prism, TableBindings* bindings) {
   LOG(INFO) << "loading dictionary '" << name_ << "'.";
-  if (tables_.empty()) {
+  auto& tables = bindings->tables;
+  auto& code_maps = bindings->code_maps;
+  if (tables.empty()) {
     LOG(ERROR) << "Cannot load dictionary '" << name_
                << "'; it contains no tables.";
     return false;
   }
-  auto& primary_table = tables_[0];
+  auto& primary_table = tables[0];
   if (!primary_table || (!primary_table->IsOpen() && !primary_table->Load())) {
     LOG(ERROR) << "Error loading table for dictionary '" << name_ << "'.";
     return false;
   }
-  if (!prism_ || (!prism_->IsOpen() && !prism_->Load())) {
+  if (!prism || (!prism->IsOpen() && !prism->Load())) {
     LOG(ERROR) << "Error loading prism for dictionary '" << name_ << "'.";
     return false;
   }
-  if (prism_->has_packs()) {
-    if (tables_.size() < 2) {
+  if (prism->has_packs()) {
+    if (tables.size() < 2) {
       auto* component =
           dynamic_cast<DictionaryComponent*>(Dictionary::Require("dictionary"));
       if (component) {
-        tables_.push_back(component->GetTable(name_ + ".packs"));
+        tables.push_back(component->GetTable(name_ + ".packs"));
       } else {
         the<ResourceResolver> resolver(
             Service::instance().CreateDeployedResourceResolver(
                 {"table", "", ".table.bin"}));
-        tables_.push_back(New<Table>(resolver->ResolvePath(name_ + ".packs")));
+        tables.push_back(New<Table>(resolver->ResolvePath(name_ + ".packs")));
       }
     }
-    if (!tables_[1]->IsOpen() && !tables_[1]->Load()) {
+    if (!tables[1]->IsOpen() && !tables[1]->Load()) {
       LOG(ERROR) << "missing compiled supplement for dictionary '" << name_
                  << "'";
       return false;
     }
   } else {
     // Without supplements, table and prism already share the same ids.
-    tables_.resize(1);
-    code_maps_.clear();
-    code_maps_.resize(1);
-    bindings_valid_ = true;
+    tables.resize(1);
+    code_maps.resize(1);
     return true;
   }
   Syllabary canonical;
-  if (prism_->has_syllabary() && !prism_->GetSyllabary(&canonical))
+  if (prism->has_syllabary() && !prism->GetSyllabary(&canonical))
     return false;
   hash_map<string, SyllableId> ids;
   SyllableId next = 0;
   for (const auto& code : canonical)
     ids[code] = next++;
-  code_maps_.clear();
-  code_maps_.resize(tables_.size());
+  code_maps.resize(tables.size());
   Syllabary actual;
-  for (size_t i = 0; i < tables_.size(); ++i) {
+  for (size_t i = 0; i < tables.size(); ++i) {
     Syllabary local;
-    if (!tables_[i]->GetSyllabary(&local))
+    if (!tables[i]->GetSyllabary(&local))
       return false;
     actual.insert(local.begin(), local.end());
     if (canonical.empty() || canonical == local)
       continue;
-    auto& mapping = code_maps_[i];
+    auto& mapping = code_maps[i];
     mapping.to_local.resize(canonical.size(), -1);
     mapping.to_global.reserve(local.size());
     SyllableId local_id = 0;
@@ -887,12 +910,11 @@ bool Dictionary::Load() {
       mapping.to_local[found->second] = local_id++;
     }
   }
-  if (prism_->has_syllabary() && canonical != actual) {
+  if (prism->has_syllabary() && canonical != actual) {
     LOG(ERROR) << "table and prism code sets differ for dictionary '" << name_
                << "'";
     return false;
   }
-  bindings_valid_ = true;
   return true;
 }
 
@@ -924,7 +946,8 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
   Config* config = ticket.schema->config();
   PrismConfig prism_config;
   const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
-  if (!prism_config.Load(config, ticket.name_space, context))
+  if (!prism_config.Load(config, ticket.name_space,
+                         context ? &context->setting_groups() : nullptr))
     return nullptr;
   string dict_name;
   if (!config->GetString(ticket.name_space + "/dictionary", &dict_name)) {

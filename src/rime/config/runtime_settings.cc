@@ -5,7 +5,6 @@
 #include <rime/config.h>
 #include <rime/config/resource_config.h>
 #include <rime/config/runtime_settings.h>
-#include <rime/context.h>
 
 namespace rime {
 namespace {
@@ -120,18 +119,16 @@ bool SettingGroupConfig::SaveValues(Config* user,
   return false;
 }
 
-bool SettingGroupConfig::Load(Config* config,
-                              const string& group,
-                              const Context* context) {
-  if (context && !context->setting_groups().empty()) {
-    const auto& groups = context->setting_groups();
-    const auto found = groups.find(group);
-    if (found == groups.end())
-      return false;
-    *this = found->second;
-    return true;
+const SettingGroupConfig* SettingGroupConfig::Find(
+    Config* config,
+    const string& group,
+    const map<string, SettingGroupConfig>* groups,
+    SettingGroupConfig* fallback) {
+  if (groups) {
+    auto found = groups->find(group);
+    return found == groups->end() ? nullptr : &found->second;
   }
-  return Load(config, group);
+  return fallback && fallback->Load(config, group) ? fallback : nullptr;
 }
 
 bool SettingGroupConfig::Load(Config* config, const string& group) {

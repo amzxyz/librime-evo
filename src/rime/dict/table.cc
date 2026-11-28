@@ -331,6 +331,8 @@ bool Table::Load() {
     LOG(ERROR) << "table format version " << format_version
                << " is no longer supported. please upgrade to version "
                << kTableFormatLatest;
+    metadata_ = nullptr;
+    Close();
     return false;
   }
 

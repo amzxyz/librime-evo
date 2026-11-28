@@ -6,6 +6,7 @@
 //
 #include <boost/algorithm/string.hpp>
 #include <rime/candidate.h>
+#include <rime/config/resource_config.h>
 #include <rime/engine.h>
 #include <rime/schema.h>
 #include <rime/segmentation.h>
@@ -108,17 +109,32 @@ ReverseLookupTranslator::ReverseLookupTranslator(const Ticket& ticket)
 
 bool ReverseLookupTranslator::PrepareSetting(const string& group,
                                              const vector<string>& values) {
+  if (!options_ && engine_) {
+    auto* config = engine_->schema()->config();
+    string reference, dependency;
+    if (config && config->GetString(name_space_ + "/prism", &reference) &&
+        ParseSettingReference(reference, &dependency) && dependency == group) {
+      InitializeDictionary();
+    }
+  }
   return !options_ || options_->PreparePrismSetting(dict_.get(), group, values);
+}
+
+void ReverseLookupTranslator::InitializeDictionary() {
+  Ticket ticket(engine_, name_space_);
+  options_.reset(new TranslatorOptions(ticket));
+  if (auto component = Dictionary::Require("dictionary"))
+    dict_.reset(component->Create(ticket));
 }
 
 void ReverseLookupTranslator::Initialize() {
   initialized_ = true;  // no retry
   if (!engine_)
     return;
-  Ticket ticket(engine_, name_space_);
-  options_.reset(new TranslatorOptions(ticket));
+  if (!options_)
+    InitializeDictionary();
   Config* config = engine_->schema()->config();
-  if (!config)
+  if (!config || !dict_)
     return;
   config->GetString(name_space_ + "/prefix", &prefix_);
   config->GetString(name_space_ + "/suffix", &suffix_);
@@ -129,14 +145,6 @@ void ReverseLookupTranslator::Initialize() {
       options_->set_enable_completion(false);  // overridden default
   }
 
-  if (auto component = Dictionary::Require("dictionary")) {
-    dict_.reset(component->Create(ticket));
-  }
-  if (dict_) {
-    dict_->Load();
-  } else {
-    return;
-  }
   auto rev_component =
       ReverseLookupDictionary::Require("reverse_lookup_dictionary");
   if (!rev_component)

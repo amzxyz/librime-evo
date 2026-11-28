@@ -522,7 +522,6 @@ bool DictCompiler::Compile(const path& schema_file) {
       dict_file_checksum = primary_table->dict_file_checksum();
       LOG(INFO) << "reuse existing table: " << primary_table->file_path();
     }
-    primary_table->Close();
   } else if (build_table_from_source) {
     rebuild_table = true;
   } else {
@@ -548,7 +547,6 @@ bool DictCompiler::Compile(const path& schema_file) {
     settings.SaveToStream(root_settings);
     settings_yaml = root_settings.str();
   }
-  reverse->Close();
   Syllabary syllabary;
   if (rebuild_table) {
     if (!build_table_from_source) {
@@ -556,6 +554,8 @@ bool DictCompiler::Compile(const path& schema_file) {
                  << "' without its source";
       return false;
     }
+    primary_table->Close();
+    reverse->Close();
     EntryCollector collector;
     if (!BuildTable(0, collector, &settings, dict_files, dict_file_checksum))
       return false;
@@ -563,7 +563,7 @@ bool DictCompiler::Compile(const path& schema_file) {
         target_resolver_->ResolvePath(dict_name_ + ".reverse.bin"));
     syllabary = std::move(collector.syllabary);
   } else {
-    if (!primary_table->Load() || !primary_table->GetSyllabary(&syllabary))
+    if (!primary_table->GetSyllabary(&syllabary))
       return false;
     primary_table->Close();
   }
@@ -599,9 +599,9 @@ bool DictCompiler::Compile(const path& schema_file) {
         (options_ & kRebuildTable) || !table->Exists() || !table->Load();
     if (!rebuild_packs) {
       rebuild_packs = table->dict_file_checksum() != packs_checksum;
-      table->Close();
     }
     if (rebuild_packs) {
+      table->Close();
       EntryCollector collector;
       collector.set_include_preset_phrases(false);
       collector.SetFallbackLookup(lookup_primary);
@@ -613,7 +613,7 @@ bool DictCompiler::Compile(const path& schema_file) {
         return false;
       syllabary.insert(collector.syllabary.begin(), collector.syllabary.end());
     } else {
-      if (!table->Load() || !table->GetSyllabary(&syllabary))
+      if (!table->GetSyllabary(&syllabary))
         return false;
       table->Close();
     }
@@ -627,6 +627,7 @@ bool DictCompiler::Compile(const path& schema_file) {
     }
   }
 
+  reverse->Close();
   // Prism invalidation depends on the code set, not word weights or text.
   boost::crc_32_type code_checksum;
   for (const auto& code : syllabary)
