@@ -137,6 +137,33 @@ emoji:
   EXPECT_TRUE(config.GetList("build/$emoji/files"));
   EXPECT_TRUE(config.GetString("translator/dictionary", &name));
   EXPECT_EQ("$example", name);
+  EXPECT_TRUE(config.GetResource("translator/dictionary", &name));
+  EXPECT_EQ("example", name);
+  EXPECT_TRUE(config.GetResource("translator/aux", &name));
+  EXPECT_EQ("aux_example", name);
+  EXPECT_TRUE(config.GetResource("emoji/data", &name));
+  EXPECT_EQ("emoji", name);
+  EXPECT_TRUE(config.GetResource("translator/prism", &name));
+  EXPECT_EQ("pinyin", name);
+  ASSERT_TRUE(config.SetString("other/dictionary", "$emoji"));
+  EXPECT_FALSE(config.GetResource("other/dictionary", &name));
+  EXPECT_EQ("pinyin", name);
+  ASSERT_TRUE(config.SetString("other/prism", "$pinyin"));
+  EXPECT_FALSE(config.GetResource("other/prism", &name));
+  ASSERT_TRUE(config.SetString("other/data", "$missing"));
+  EXPECT_FALSE(config.GetResource("other/data", &name));
+  ASSERT_TRUE(config.SetString("other/dictionary", "example"));
+  EXPECT_TRUE(config.GetResource("other/prism", &name));
+  EXPECT_EQ("pinyin", name);
+  ASSERT_TRUE(config.SetItem("other", nullptr));
+  EXPECT_FALSE(config.GetResource("missing", &name));
+  ASSERT_TRUE(config.SetString("test_resource", "${input_types}"));
+  EXPECT_FALSE(config.GetResource("test_resource", &name));
+  ASSERT_TRUE(config.SetString("test_resource", "external"));
+  EXPECT_TRUE(config.GetResource("test_resource", &name));
+  EXPECT_EQ("external", name);
+  EXPECT_TRUE(config.GetString("translator/dictionary", &name));
+  EXPECT_EQ("$example", name);
   EXPECT_TRUE(ValidateSchemaResources(&config));
 }
 

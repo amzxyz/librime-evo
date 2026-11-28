@@ -31,6 +31,10 @@ RIME_DLL bool ResolveResourceReference(Config* config,
 RIME_DLL bool ResolvePrismReference(Config* config,
                                     const string& dictionary,
                                     string* value);
+// Resolve a static config resource using its field and declaration.
+RIME_DLL bool ResolveConfigResource(Config* config,
+                                    const string& path,
+                                    string* value);
 }  // namespace rime
 
 #endif  // RIME_RESOURCE_CONFIG_H_

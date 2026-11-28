@@ -119,4 +119,37 @@ bool ResolvePrismReference(Config* config,
   return true;
 }
 
+bool ResolveConfigResource(Config* config, const string& path, string* value) {
+  if (!config || !value || value->empty())
+    return false;
+  if (value->front() != '$')
+    return true;
+
+  const auto slash = path.rfind('/');
+  const string field = path.substr(slash == string::npos ? 0 : slash + 1);
+  if (field == "dictionary")
+    return ResolveResourceReference(config, "dictionary", value);
+  if (field == "aux")
+    return ResolveResourceReference(config, "auxiliary", value);
+  if (field == "prism") {
+    string dictionary;
+    const string prefix =
+        slash == string::npos ? string() : path.substr(0, slash + 1);
+    return config->GetResource(prefix + "dictionary", &dictionary) &&
+           ResolvePrismReference(config, dictionary, value);
+  }
+
+  string name;
+  if (!ParseResourceSymbol(*value, &name))
+    return false;
+  auto definition = config->GetMap("build/$" + name);
+  auto type = definition ? definition->GetValue("type") : nullptr;
+  if (!type || !ValidSymbol(type->str())) {
+    LOG(ERROR) << "undeclared resource: " << *value;
+    return false;
+  }
+  *value = std::move(name);
+  return true;
+}
+
 }  // namespace rime

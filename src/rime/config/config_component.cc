@@ -12,6 +12,7 @@
 #include <rime/config/config_data.h>
 #include <rime/config/config_types.h>
 #include <rime/config/plugins.h>
+#include <rime/config/resource_config.h>
 
 namespace rime {
 
@@ -89,6 +90,15 @@ bool Config::GetString(const string& path, string* value) {
   DLOG(INFO) << "read: " << path;
   auto p = As<ConfigValue>(data_->Traverse(path));
   return p && p->GetString(value);
+}
+
+bool Config::GetResource(const string& path, string* value) {
+  string name;
+  if (!value || !GetString(path, &name) || name.empty() ||
+      !ResolveConfigResource(this, path, &name))
+    return false;
+  *value = std::move(name);
+  return true;
 }
 
 size_t Config::GetListSize(const string& path) {

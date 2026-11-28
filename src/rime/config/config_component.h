@@ -46,6 +46,8 @@ class Config : public Class<Config, const string&>, public ConfigItemRef {
   RIME_DLL bool GetInt(const string& path, int* value);
   RIME_DLL bool GetDouble(const string& path, double* value);
   RIME_DLL bool GetString(const string& path, string* value);
+  // Read a static resource reference without changing the stored scalar.
+  RIME_DLL bool GetResource(const string& path, string* value);
   RIME_DLL size_t GetListSize(const string& path);
 
   an<ConfigItem> GetItem(const string& path);
