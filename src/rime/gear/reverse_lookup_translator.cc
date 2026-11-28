@@ -106,6 +106,11 @@ ReverseLookupTranslator::ReverseLookupTranslator(const Ticket& ticket)
   config->GetString(name_space_ + "/tag", &tag_);
 }
 
+bool ReverseLookupTranslator::PrepareSetting(const string& group,
+                                             const vector<string>& values) {
+  return !options_ || options_->PreparePrismSetting(dict_.get(), group, values);
+}
+
 void ReverseLookupTranslator::Initialize() {
   initialized_ = true;  // no retry
   if (!engine_)

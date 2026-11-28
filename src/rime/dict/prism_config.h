@@ -11,6 +11,7 @@
 namespace rime {
 
 class Config;
+class Context;
 
 struct PrismConfig {
   struct Selection {
@@ -20,10 +21,12 @@ struct PrismConfig {
   };
 
   RIME_DLL bool Load(Config* schema, const string& name_space);
+  bool Load(Config* schema, const string& name_space, const Context* context);
 
   string name;
   vector<Selection> selections;
   string setting;
+  string default_selection;
 };
 
 }  // namespace rime

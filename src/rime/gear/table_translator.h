@@ -34,6 +34,10 @@ class TableTranslator : public Translator,
                       vector<CodeChoice>* result) override;
   virtual bool Memorize(const CommitEntry& commit_entry);
   bool PrepareForReload() override { return FinishSession(); }
+  bool PrepareSetting(const string& group,
+                      const vector<string>& values) override {
+    return PreparePrismSetting(dict_.get(), group, values);
+  }
 
   an<Translation> MakeSentence(const string& input,
                                size_t start,

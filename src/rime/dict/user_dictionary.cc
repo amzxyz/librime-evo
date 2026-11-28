@@ -909,7 +909,7 @@ bool UserDictionaryComponent::ResolveConfig(Config* config,
   string group;
   if (ParseSettingReference(resolved.mode, &group)) {
     SettingGroupConfig setting;
-    if (!setting.Load(config, group) ||
+    if (!setting.Load(config, group, context) ||
         setting.mode != SettingGroupConfig::kSingle ||
         !setting.resource_type.empty())
       return false;

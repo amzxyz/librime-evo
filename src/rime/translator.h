@@ -41,6 +41,10 @@ class Translator : public Class<Translator, const Ticket&> {
   // Structural settings may recreate a translator at a setting change.
   // Finish pending learning before releasing the current instance.
   virtual bool PrepareForReload() { return true; }
+  // Acquire any newly selected immutable resources before persisting a choice.
+  virtual bool PrepareSetting(const string&, const vector<string>&) {
+    return true;
+  }
 
  protected:
   Engine* engine_;

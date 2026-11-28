@@ -1424,7 +1424,7 @@ lookup:
   EXPECT_TRUE(std::filesystem::exists("build_dict_test.zrm.prism.bin"));
 }
 
-TEST_F(RimeBuildDictionaryTest, SharedPrismsArePreloaded) {
+TEST_F(RimeBuildDictionaryTest, SharedPrismsLoadOnFirstSelection) {
   WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
   input_types:
     type: prism
@@ -1445,6 +1445,42 @@ translator:
   ASSERT_TRUE(dict->Load());
   ASSERT_TRUE(dict->SetPrism("zrm"));
   EXPECT_TRUE(dict->prism()->IsOpen());
+  const auto selected = dict->prism();
+  EXPECT_FALSE(dict->SetPrism("missing"));
+  EXPECT_EQ(selected, dict->prism());
+  ASSERT_TRUE(dict->SetPrism("pinyin"));
+  ASSERT_TRUE(dict->SetPrism("zrm"));
+  EXPECT_EQ(selected, dict->prism());
+}
+
+TEST_F(RimeBuildDictionaryTest, MissingUnselectedPrismDoesNotBlockStartup) {
+  WriteSchema(string(kDefinitions) + R"YAML(runtime_settings:
+  input_types:
+    type: prism
+    mode: single
+    default: $pinyin
+    values:
+      - {value: $pinyin}
+      - {value: $zrm}
+engine:
+  segmentors: [abc_segmentor]
+  translators: [script_translator]
+translator:
+  dictionary: build_dict_test
+  prism: ${input_types}
+  user_dict_mode: off
+  enable_completion: false
+)YAML");
+  ASSERT_TRUE(DictCompiler::CompileDictionaries(schema_path_));
+  ASSERT_TRUE(std::filesystem::remove("build_dict_test.zrm.prism.bin"));
+  auto engine = OpenEngine();
+  ASSERT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+  engine->context()->set_input("hao");
+  ASSERT_TRUE(engine->context()->HasMenu());
+  EXPECT_FALSE(engine->SelectSetting("input_types", {"zrm"}));
+  EXPECT_TRUE(engine->context()->setting_selected("input_types", "pinyin"));
+  EXPECT_EQ("hao", engine->context()->input());
+  EXPECT_TRUE(engine->context()->HasMenu());
 }
 
 TEST_F(RimeBuildDictionaryTest, RejectsMissingPrismDefinition) {

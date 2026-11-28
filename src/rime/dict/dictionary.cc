@@ -574,9 +574,16 @@ bool Dictionary::AddPrism(const string& name, const an<Prism>& prism) {
   return true;
 }
 
+bool Dictionary::PreparePrism(const string& name) {
+  auto it = prisms_.find(name);
+  return it != prisms_.end() && it->second &&
+         (it->second->IsOpen() || it->second->Load());
+}
+
 bool Dictionary::SetPrism(const string& name) {
   auto it = prisms_.find(name);
-  if (it == prisms_.end() || !it->second)
+  if (it == prisms_.end() || !it->second ||
+      (!it->second->IsOpen() && !it->second->Load()))
     return false;
   if (prism_ != it->second) {
     prism_ = it->second;
@@ -916,7 +923,8 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
     return nullptr;
   Config* config = ticket.schema->config();
   PrismConfig prism_config;
-  if (!prism_config.Load(config, ticket.name_space))
+  const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
+  if (!prism_config.Load(config, ticket.name_space, context))
     return nullptr;
   string dict_name;
   if (!config->GetString(ticket.name_space + "/dictionary", &dict_name)) {
@@ -933,15 +941,23 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
   if (!prism_config.selections.empty()) {
     prism_name = prism_config.selections.front().name;
     if (!prism_config.setting.empty()) {
-      SettingGroupConfig types;
-      if (!types.Load(config, prism_config.setting))
-        return nullptr;
-      const auto* context = ticket.engine ? ticket.engine->context() : nullptr;
       const auto& group = prism_config.setting;
-      const auto& values =
-          context ? context->setting_values(group) : types.defaults;
-      const string initial =
-          values.empty() ? types.defaults.front() : values.front();
+      string initial = prism_config.default_selection;
+      if (context) {
+        const auto& values = context->setting_values(group);
+        if (!values.empty())
+          initial = values.front();
+      } else {
+        SettingGroupConfig types;
+        if (!types.Load(config, group))
+          return nullptr;
+        auto* component = Config::Require("user_config");
+        the<Config> user(component ? component->Create("user") : nullptr);
+        const auto values =
+            types.RestoreValues(user.get(), ticket.schema->schema_id(), group);
+        if (!values.empty())
+          initial = values.front();
+      }
       for (const auto& selection : prism_config.selections) {
         if (selection.option == initial)
           prism_name = selection.name;
@@ -981,11 +997,6 @@ Dictionary* DictionaryComponent::Create(const Ticket& ticket) {
     }
     auto prism =
         GetPrism(ResolvePrismName(config, dictionary->name(), selection.name));
-    if (!prism_config.setting.empty() && !prism->IsOpen() && !prism->Load()) {
-      LOG(ERROR) << "cannot preload prism '" << selection.name << "'";
-      delete dictionary;
-      return nullptr;
-    }
     dictionary->AddPrism(selection.name, prism);
   }
   return dictionary;

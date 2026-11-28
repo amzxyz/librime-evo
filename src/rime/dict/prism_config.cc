@@ -7,9 +7,16 @@
 namespace rime {
 
 bool PrismConfig::Load(Config* schema, const string& name_space) {
+  return Load(schema, name_space, nullptr);
+}
+
+bool PrismConfig::Load(Config* schema,
+                       const string& name_space,
+                       const Context* context) {
   name.clear();
   selections.clear();
   setting.clear();
+  default_selection.clear();
   auto settings = schema ? schema->GetMap(name_space) : nullptr;
   if (!settings)
     return true;
@@ -26,7 +33,7 @@ bool PrismConfig::Load(Config* schema, const string& name_space) {
     }
     if (ParseSettingReference(name, &setting)) {
       SettingGroupConfig types;
-      if (!types.Load(schema, setting) ||
+      if (!types.Load(schema, setting, context) ||
           types.mode != SettingGroupConfig::kSingle ||
           types.resource_type != "prism" || types.options.empty())
         return false;
@@ -40,6 +47,7 @@ bool PrismConfig::Load(Config* schema, const string& name_space) {
           return false;
         selections.push_back({resource, choice.value, choice.label});
       }
+      default_selection = types.defaults.front();
       name.clear();
     } else {
       string dictionary;

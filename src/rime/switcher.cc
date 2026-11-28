@@ -109,8 +109,7 @@ void Switcher::RefreshSettingsMenu(string group,
                                    size_t highlight) {
   if (!engine_)
     return;
-  map<string, SettingGroupConfig> groups;
-  SettingGroupConfig::LoadGroups(engine_->schema()->config(), &groups);
+  const auto& groups = engine_->context()->setting_groups();
   settings_menu_ = true;
   setting_group_ = group;
   auto translation = New<FifoTranslation>();

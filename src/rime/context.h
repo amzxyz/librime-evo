@@ -10,6 +10,7 @@
 #include <rime/common.h>
 #include <rime/commit_history.h>
 #include <rime/composition.h>
+#include <rime/config/runtime_settings.h>
 
 namespace rime {
 
@@ -96,7 +97,16 @@ class RIME_DLL Context {
   void SetSettingValues(const string& group, vector<string> values) {
     settings_[group] = std::move(values);
   }
-  void ClearSettings() { settings_.clear(); }
+  void ClearSettings() {
+    settings_.clear();
+    setting_groups_.clear();
+  }
+  const map<string, SettingGroupConfig>& setting_groups() const {
+    return setting_groups_;
+  }
+  void SetSettingGroups(map<string, SettingGroupConfig> groups) {
+    setting_groups_ = std::move(groups);
+  }
 
   const map<string, bool>& options() const { return options_; }
   const map<string, string>& properties() const { return properties_; }
@@ -132,6 +142,7 @@ class RIME_DLL Context {
   CommitHistory commit_history_;
   map<string, bool> options_;
   map<string, vector<string>> settings_;
+  map<string, SettingGroupConfig> setting_groups_;
   map<string, string> properties_;
 
   Notifier commit_notifier_;

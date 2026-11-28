@@ -142,6 +142,9 @@ class TranslatorOptions {
  public:
   TranslatorOptions(const Ticket& ticket);
   bool IsUserDictDisabledFor(const string& input) const;
+  bool PreparePrismSetting(Dictionary* dictionary,
+                           const string& group,
+                           const vector<string>& values);
   bool SelectPrism(Dictionary* dictionary,
                    const Context* context,
                    UserDictionary* user_dictionary = nullptr,

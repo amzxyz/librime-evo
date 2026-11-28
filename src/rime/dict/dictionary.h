@@ -116,6 +116,7 @@ class Dictionary : public Class<Dictionary, const Ticket&> {
   const an<Table>& primary_table() const { return tables_[0]; }
   const an<Prism>& prism() const { return prism_; }
   bool AddPrism(const string& name, const an<Prism>& prism);
+  bool PreparePrism(const string& name);
   bool SetPrism(const string& name);
   void SetFuzzyTypes(const vector<string>& groups);
   uint32_t fuzzy_mask() const { return fuzzy_mask_; }

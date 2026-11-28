@@ -136,7 +136,6 @@ class ConcreteEngine : public Engine {
   vector<of<Formatter>> formatters_;
   vector<of<Processor>> post_processors_;
   an<Switcher> switcher_;
-  map<string, SettingGroupConfig> runtime_settings_;
   bool applying_switch_ = false;
   set<string> schema_switches_;
 };
@@ -248,13 +247,12 @@ void ConcreteEngine::OnOptionUpdate(Context* ctx, const string& option) {
 
 void ConcreteEngine::InitializeRuntimeSettings() {
   context_->ClearSettings();
-  runtime_settings_.clear();
-  if (!SettingGroupConfig::LoadGroups(schema_->config(), &runtime_settings_)) {
-    runtime_settings_.clear();
+  map<string, SettingGroupConfig> groups;
+  if (!SettingGroupConfig::LoadGroups(schema_->config(), &groups))
     return;
-  }
+  context_->SetSettingGroups(std::move(groups));
   auto* user = switcher_ ? switcher_->user_config() : nullptr;
-  for (const auto& [group, setting] : runtime_settings_) {
+  for (const auto& [group, setting] : context_->setting_groups()) {
     context_->SetSettingValues(
         group, setting.RestoreValues(user, schema_->schema_id(), group));
   }
@@ -262,14 +260,19 @@ void ConcreteEngine::InitializeRuntimeSettings() {
 
 bool ConcreteEngine::SelectConfiguredSetting(const string& group,
                                              vector<string> values) {
-  auto found = runtime_settings_.find(group);
-  if (found == runtime_settings_.end() || !found->second.Normalize(&values))
+  const auto& groups = context_->setting_groups();
+  auto found = groups.find(group);
+  if (found == groups.end() || !found->second.Normalize(&values))
     return false;
   if (found->second.fixed)
     return false;
   const bool changed = context_->setting_values(group) != values;
   vector<size_t> reload;
   if (changed) {
+    for (const auto& entry : translators_) {
+      if (!entry.component->PrepareSetting(group, values))
+        return false;
+    }
     for (size_t i = 0; i < translators_.size(); ++i) {
       const auto& entry = translators_[i];
       Ticket ticket(this, "translator", entry.prescription);
@@ -663,6 +666,8 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
   Config* config = schema ? schema->config() : nullptr;
   if (!config)
     return;
+  auto* user_component = Config::Require("user_config");
+  the<Config> user(user_component ? user_component->Create("user") : nullptr);
   set<string> dictionaries, auxiliary, rewrites;
   bool grammar = false;
   // Isolate optional resource failures. Collect only mappings associated
@@ -730,8 +735,9 @@ void Engine::PrepareSchemaResources(Schema* schema, vector<an<void>>* pins) {
           if (!group.empty()) {
             SettingGroupConfig types;
             if (types.Load(config, group)) {
-              for (const auto& type : types.options)
-                auxiliary.insert(type.value);
+              const auto selected =
+                  types.RestoreValues(user.get(), schema->schema_id(), group);
+              auxiliary.insert(selected.begin(), selected.end());
             }
           } else if (ResolveResourceReference(config, "auxiliary", &aux) &&
                      !aux.empty()) {
@@ -950,18 +956,22 @@ void ConcreteEngine::InitializeOptions() {
   const auto& schema_id = schema_->schema_id();
   Switches switches(config);
   bool changed = false;
-  switches.FindOption([&](SwitchOption first) {
-    if (first.option_index != 0)
-      return Switches::kContinue;
-    auto members = GetMembers(switches, first);
+  vector<vector<SwitchOption>> groups;
+  switches.FindOption([&](SwitchOption option) {
+    if (groups.empty() ||
+        groups.back().front().switch_index != option.switch_index)
+      groups.emplace_back();
+    groups.back().push_back(std::move(option));
+    return Switches::kContinue;
+  });
+  for (const auto& members : groups) {
+    const auto& first = members.front();
     bool public_names = true;
     for (const auto& member : members) {
       public_names &= PublicSwitchName(member.option_name);
       if (!member.option_name.empty())
         schema_switches_.insert(member.option_name);
     }
-    if (members.empty())
-      return Switches::kContinue;
     const bool radio = first.type == Switches::kRadioGroup;
     const bool remember = first.reset_value < 0 && public_names &&
                           !schema_id.empty() &&
@@ -1000,8 +1010,7 @@ void ConcreteEngine::InitializeOptions() {
     // Normalize a previously saved radio group to exactly one selection.
     if (remember && radio && has_saved_value)
       changed |= SaveSwitchValues(user, schema_id, members, values);
-    return Switches::kContinue;
-  });
+  }
   if (changed && user && !user->Save())
     LOG(ERROR) << "cannot normalize saved switches";
 }

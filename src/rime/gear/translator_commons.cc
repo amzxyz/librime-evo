@@ -8,6 +8,7 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include <rime/config.h>
 #include <rime/context.h>
+#include <rime/engine.h>
 #include <rime/dict/dictionary.h>
 #include <rime/dict/user_dictionary.h>
 #include <rime/schema.h>
@@ -120,7 +121,9 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
   if (!ticket.schema)
     return;
   if (Config* config = ticket.schema->config()) {
-    prism_config_valid_ = prism_config_.Load(config, ticket.name_space);
+    prism_config_valid_ =
+        prism_config_.Load(config, ticket.name_space,
+                           ticket.engine ? ticket.engine->context() : nullptr);
     string fuzzy;
     if (config->GetString(ticket.name_space + "/fuzzy", &fuzzy)) {
       if (!ParseSettingReference(fuzzy, &fuzzy_setting_))
@@ -179,6 +182,20 @@ TranslatorOptions::TranslatorOptions(const Ticket& ticket) {
   if (delimiters_.empty()) {
     delimiters_ = " ";
   }
+}
+
+bool TranslatorOptions::PreparePrismSetting(Dictionary* dictionary,
+                                            const string& group,
+                                            const vector<string>& values) {
+  if (prism_config_.setting != group || !dictionary)
+    return true;
+  if (values.size() != 1)
+    return false;
+  for (const auto& selection : prism_config_.selections) {
+    if (selection.option == values.front())
+      return dictionary->PreparePrism(selection.name);
+  }
+  return false;
 }
 
 bool TranslatorOptions::SelectPrism(Dictionary* dictionary,

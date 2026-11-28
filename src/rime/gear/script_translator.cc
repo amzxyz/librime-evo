@@ -379,19 +379,11 @@ ScriptTranslator::ScriptTranslator(const Ticket& ticket)
         !ResolveResourceReference(config, "auxiliary", &auxiliary_type_))
       auxiliary_type_.clear();
     if (!auxiliary_setting_.empty()) {
-      if (auxiliary_types_.Load(config, auxiliary_setting_) &&
-          auxiliary_types_.mode == SettingGroupConfig::kSingle &&
-          auxiliary_types_.resource_type == "auxiliary") {
-        for (const auto& item : auxiliary_types_.options) {
-          an<AuxiliaryDb> database = AuxiliaryDb::OpenShared(item.value);
-          if (!database) {
-            LOG(ERROR) << "cannot preload auxiliary group '" << item.value
-                       << "'";
-            continue;
-          }
-          auxiliary_databases_.emplace(item.value, std::move(database));
-        }
-      } else {
+      SettingGroupConfig types;
+      if (!types.Load(config, auxiliary_setting_,
+                      ticket.engine ? ticket.engine->context() : nullptr) ||
+          types.mode != SettingGroupConfig::kSingle ||
+          types.resource_type != "auxiliary") {
         auxiliary_type_.clear();
         auxiliary_setting_.clear();
       }
@@ -592,17 +584,28 @@ ScriptTranslator::DirectAuxMode ScriptTranslator::GetDirectAuxMode() const {
   return DirectAuxMode::kOff;
 }
 
+bool ScriptTranslator::PrepareAuxiliary(const string& value) {
+  if (auxiliary_databases_.count(value))
+    return true;
+  auto database = AuxiliaryDb::OpenShared(value);
+  if (!database)
+    return false;
+  auxiliary_databases_.emplace(value, std::move(database));
+  return true;
+}
+
+bool ScriptTranslator::PrepareSetting(const string& group,
+                                      const vector<string>& values) {
+  return PreparePrismSetting(dict_.get(), group, values) &&
+         (group != auxiliary_setting_ ||
+          (values.size() == 1 && PrepareAuxiliary(values.front())));
+}
+
 bool ScriptTranslator::LoadAuxiliaryMatcher() {
   string selected = auxiliary_type_;
   if (!auxiliary_setting_.empty()) {
-    selected.clear();
-    for (const auto& item : auxiliary_types_.options) {
-      if (engine_->context()->setting_selected(auxiliary_setting_,
-                                               item.value)) {
-        selected = item.value;
-        break;
-      }
-    }
+    const auto& values = engine_->context()->setting_values(auxiliary_setting_);
+    selected = values.empty() ? string() : values.front();
   }
   if (selected != active_auxiliary_type_) {
     auxiliary_matcher_.reset();
@@ -615,10 +618,9 @@ bool ScriptTranslator::LoadAuxiliaryMatcher() {
     return false;
   if (!auxiliary_db_) {
     if (!auxiliary_setting_.empty()) {
-      const auto found = auxiliary_databases_.find(selected);
-      if (found == auxiliary_databases_.end())
+      if (!PrepareAuxiliary(selected))
         return false;
-      auxiliary_db_ = found->second;
+      auxiliary_db_ = auxiliary_databases_.at(selected);
     } else {
       auxiliary_db_ = AuxiliaryDb::OpenShared(selected);
       if (!auxiliary_db_)
